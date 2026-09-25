@@ -25,12 +25,14 @@ Adw.init()
 def engine(tmp_path):
     settings = Settings(tmp_path / "s.json")
     settings.set("autoplay_radio", False)
+    settings.set("sync_port", 0)        # jamais le vrai port 47823 en test
     eng = Engine(settings=settings, library=Library(tmp_path / "l.db"),
                  player=FakePlayer(), extractor=FakeExtractor(),
                  sponsorblock=FakeSponsorBlock(), recommender=FakeRecommender(),
                  ytmusic=object(), cookies=FakeCookies(),
                  innertube=FakeInnerTube())
     yield eng
+    eng.sync.stop()
     eng.library.close()
 
 
@@ -725,3 +727,155 @@ def test_immersion_scene_setting_applies_live(window, engine):
         pytest.skip("pas d'Immersion dans cet environnement")
     window._on_setting_changed("immersion_mode", "glyph")
     assert window.immersion.mode == "glyph"
+
+
+# ---- Réglages : synchronisation --------------------------------------------
+
+@pytest.fixture
+def sync_dialog(window, engine, monkeypatch):
+    """Réglages sur le bureau de test : pas de mDNS, port choisi par l'OS."""
+    from triat.ui.settings_dialog import SettingsDialog
+
+    monkeypatch.setattr(engine.sync, "_announce", lambda: None)
+    dialog = SettingsDialog(engine)
+    dialog.present(window)
+    yield dialog
+    dialog._close_pairing()
+
+
+def _sync_device(name="Téléphone de test", last_sync=None):
+    return {"name": name, "key": "AAAA", "paired_at": 1.0,
+            "last_sync": last_sync}
+
+
+def test_sync_page_builds_and_starts_off(window, engine):
+    from triat.ui.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog(engine)
+    titles = [page.get_title() for page in _pages(dialog)]
+    assert titles.index("Synchronisation") == titles.index("Système") - 1
+    assert not dialog.sync_switch.get_active()
+    assert not dialog.pair_button.get_sensitive()       # rien à associer
+    assert "Activez" in dialog.sync_address.get_subtitle()
+    assert not engine.sync.running
+    assert dialog._device_rows[0].get_title() == "Aucun téléphone associé"
+
+
+def _pages(dialog):
+    """Pages d'un Adw.PreferencesDialog, dans l'ordre d'affichage."""
+    pages = dialog.get_visible_page()
+    stack = pages.get_ancestor(Adw.ViewStack) if pages else None
+    return [stack.get_page(child).get_child() for child in
+            _children(stack)] if stack else []
+
+
+def _children(stack):
+    child = stack.get_first_child()
+    while child is not None:
+        yield child
+        child = child.get_next_sibling()
+
+
+def test_sync_switch_starts_and_stops_the_server(sync_dialog, engine):
+    sync_dialog.sync_switch.set_active(True)
+    assert engine.sync.running
+    assert engine.settings.get("sync_enabled") is True
+    assert sync_dialog.pair_button.get_sensitive()
+    assert f":{engine.sync.port}" in sync_dialog.sync_address.get_subtitle()
+
+    sync_dialog.sync_switch.set_active(False)
+    assert not engine.sync.running
+    assert engine.settings.get("sync_enabled") is False
+    assert not sync_dialog.pair_button.get_sensitive()
+
+
+def test_sync_switch_goes_back_when_the_server_cannot_start(sync_dialog, engine,
+                                                          monkeypatch):
+    monkeypatch.setattr(engine.sync, "start", lambda announce=True: False)
+    sync_dialog.sync_switch.set_active(True)
+    assert not sync_dialog.sync_switch.get_active()
+    assert engine.settings.get("sync_enabled") is False
+
+
+def test_pairing_shows_an_eight_character_code(sync_dialog, engine):
+    from triat.core.sync import normalize_code
+
+    sync_dialog.sync_switch.set_active(True)
+    sync_dialog.pair_button.emit("clicked")
+    shown = sync_dialog.pairing_code_label.get_text()
+    assert len(shown) == 9 and shown[4] == "-"          # ABCD-EFGH
+    assert len(normalize_code(shown)) == 8
+    assert engine.sync.pairing_active
+    assert sync_dialog.pairing_countdown.get_label() == "Expire dans 2:00"
+
+    sync_dialog._tick_pairing()
+    assert sync_dialog.pairing_countdown.get_label() == "Expire dans 1:59"
+
+
+def test_pairing_closes_by_itself_at_zero(sync_dialog, engine):
+    sync_dialog.sync_switch.set_active(True)
+    sync_dialog.pair_button.emit("clicked")
+    sync_dialog._pairing_left = 1
+    assert sync_dialog._tick_pairing() is False          # la source s'arrête
+    assert sync_dialog._pairing_dialog is None
+    assert not engine.sync.pairing_active                # le code ne vaut plus rien
+
+
+def test_pairing_closes_when_a_phone_appears(sync_dialog, engine):
+    sync_dialog.sync_switch.set_active(True)
+    sync_dialog.pair_button.emit("clicked")
+    assert sync_dialog._tick_pairing() is True           # personne : on continue
+    engine.settings.set("sync_devices", {"tel-1": _sync_device()})
+    assert sync_dialog._tick_pairing() is False
+    assert sync_dialog._pairing_dialog is None
+    assert not engine.sync.pairing_active
+    assert sync_dialog._device_rows[0].get_title() == "Téléphone de test"
+
+
+def test_cancelling_the_pairing_dialog_drops_the_code(sync_dialog, engine):
+    sync_dialog.sync_switch.set_active(True)
+    sync_dialog.pair_button.emit("clicked")
+    sync_dialog._pairing_dialog.close()                  # Annuler ou Échap
+    assert sync_dialog._pairing_dialog is None
+    assert sync_dialog._pairing_timer == 0
+    assert not engine.sync.pairing_active
+
+
+def test_forget_removes_the_device(sync_dialog, engine):
+    engine.settings.set("sync_devices", {
+        "tel-1": _sync_device("Premier"), "tel-2": _sync_device("Second")})
+    sync_dialog._refresh_devices()
+    assert [r.get_title() for r in sync_dialog._device_rows] == ["Premier", "Second"]
+
+    button = _find_button(sync_dialog._device_rows[0], "Oublier")
+    assert button is not None
+    button.emit("clicked")
+    assert list(engine.sync.devices()) == ["tel-2"]
+    assert [r.get_title() for r in sync_dialog._device_rows] == ["Second"]
+
+    _find_button(sync_dialog._device_rows[0], "Oublier").emit("clicked")
+    assert engine.sync.devices() == {}
+    assert sync_dialog._device_rows[0].get_title() == "Aucun téléphone associé"
+
+
+def _find_button(widget, label):
+    """Premier Gtk.Button portant ce libellé, sous `widget`."""
+    if isinstance(widget, Gtk.Button) and widget.get_label() == label:
+        return widget
+    child = widget.get_first_child()
+    while child is not None:
+        found = _find_button(child, label)
+        if found is not None:
+            return found
+        child = child.get_next_sibling()
+    return None
+
+
+def test_last_sync_is_told_in_french():
+    from triat.ui.settings_dialog import format_last_sync
+
+    assert format_last_sync(None) == "Jamais synchronisé"
+    assert format_last_sync(1000.0, now=1030.0) == "Dernière synchro : à l'instant"
+    assert format_last_sync(1000.0, now=1000.0 + 300) == "Dernière synchro : il y a 5 min"
+    assert format_last_sync(1000.0, now=1000.0 + 7300) == "Dernière synchro : il y a 2 h"
+    assert format_last_sync(1000.0, now=1000.0 + 3 * 86400) == "Dernière synchro : il y a 3 j"

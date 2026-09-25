@@ -329,6 +329,9 @@ class HomePage(Gtk.Box):
             self.resume.fullscreen.connect("clicked", self._start_immersion)
             engine.connect("track-changed", lambda *_: self._show_resume())
             engine.connect("state-changed", lambda *_: self._show_resume())
+            # Synchro avec le téléphone, métadonnées complétées : l'accueil
+            # se remet à jour s'il est à l'écran (sinon à la prochaine visite).
+            engine.connect("library-changed", lambda *_: self._on_library_changed())
 
         # --- Mixes ---
         self.mixes_section = SectionTitle("Mixes pour toi")
@@ -371,6 +374,10 @@ class HomePage(Gtk.Box):
 
         self._playlist_ids: list[int] = []
         self.refresh()
+
+    def _on_library_changed(self) -> None:
+        if self.get_mapped():
+            self.refresh()
 
     def set_narrow(self, narrow: bool) -> None:
         self.resume.art.set_size_request(112 if narrow else 148,
@@ -866,6 +873,9 @@ class TriatWindow(Adw.ApplicationWindow):
         engine.connect("track-changed", self._on_track_marks)
         engine.connect("segment-skipped", self._on_segment_skipped)
         engine.connect("segment-pending", self._on_segment_pending)
+        # Les playlists de la barre latérale suivent la bibliothèque
+        # (synchro du téléphone : playlists créées ou supprimées là-bas).
+        engine.connect("library-changed", lambda *_: self.refresh_sidebar())
 
     def _on_track_marks(self, _engine, _ref) -> None:
         if self.library is not None:

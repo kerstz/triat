@@ -27,6 +27,7 @@ from . import search_results
 from .scrobble import Scrobbler
 from .settings import Settings
 from .sponsorblock import ASK, SKIP, SkipPlanner, SponsorBlockClient
+from .sync import SyncServer
 from .ytmusic import YTMusicService
 
 log = logging.getLogger(__name__)
@@ -84,6 +85,15 @@ class Engine(GObject.Object):
         self.downloads.attach_cookies(self.cookies)
         self.player = player or Player()
         self.queue = Queue()
+        # Serveur de synchro Wi-Fi avec le téléphone. Il ne démarre pas ici :
+        # l'app le lance si « sync_enabled » (voir set_sync_enabled). Le
+        # cookie est lu à la demande, seulement si l'utilisateur le partage.
+        self.sync = SyncServer(
+            self.library, self.settings,
+            cookie_header=lambda: self.cookies.cookie_header(),
+            # Appelé depuis le fil du serveur : on republie sur le fil GTK.
+            on_changed=lambda _changes: GLib.idle_add(
+                lambda: (self.emit("library-changed"), False)[1]))
 
         self._planner: SkipPlanner | None = None
         self._pending_asked: set[str] = set()
@@ -129,6 +139,16 @@ class Engine(GObject.Object):
         self.settings.set("normalise_volume", enabled)
         self.settings.save()
         self.player.set_normalisation(enabled)
+
+    def set_sync_enabled(self, on: bool) -> bool:
+        """Active ou coupe la synchro Wi-Fi, et retient le choix.
+        Renvoie True si le serveur écoute après l'appel."""
+        self.settings.set("sync_enabled", bool(on))
+        self.settings.save()
+        if on:
+            return self.sync.start()
+        self.sync.stop()
+        return False
 
     @property
     def equalizer(self) -> tuple[bool, tuple[float, ...]]:
@@ -749,6 +769,12 @@ class Engine(GObject.Object):
             GLib.timeout_add(300, seek_when_ready)
 
     def shutdown(self) -> None:
+        # D'abord le serveur : plus aucune synchro ne touche la bibliothèque
+        # pendant qu'on la ferme.
+        try:
+            self.sync.stop()
+        except Exception as exc:
+            log.debug("Arrêt de la synchro: %s", exc)
         self._flush_history(completed=False)
         self.save_state()
         self.player.shutdown()

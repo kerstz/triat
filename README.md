@@ -90,11 +90,17 @@ python -m venv --system-site-packages .venv
 
 - Your library and settings stay on your computer (`~/.local/share/triat`,
   `~/.config/triat`). The app only talks to YouTube, SponsorBlock and LRCLIB
-  (and ListenBrainz if you turn it on).
+  (and ListenBrainz if you turn it on), and to your own phone on the
+  local network if you turn on the sync.
 - When YouTube changes something, playback can break. Updating yt-dlp
   usually fixes it: `~/.local/share/triat/venv/bin/pip install -U yt-dlp`
 - `triat doctor` checks that everything is working.
-- A phone version and syncing over Wi-Fi are in progress.
+- Sync with your phone over Wi-Fi: turn it on in Settings > Synchronisation,
+  then pair [Triat for Android](https://github.com/kerstz/triat-android)
+  with the code shown there. Playlists, likes and listening history stay
+  the same on both, encrypted, and never leave your home network. If a
+  firewall is on, open TCP port 47823 and UDP port 5353 to your local
+  network; `triat doctor` tells you what is blocked.
 
 ## License
 

@@ -11,8 +11,12 @@ Sert de banc d'essai du core et de contrôle en ligne de commande.
 from __future__ import annotations
 
 import argparse
+import http.client
+import json
 import logging
+import os
 import signal
+import subprocess
 import sys
 
 import gi
@@ -253,6 +257,122 @@ def cmd_stats(args) -> int:
     return 0
 
 
+# ---- Diagnostic de la synchro -----------------------------------------
+
+def port_synchro(settings) -> int:
+    """Port TCP attendu pour la synchro (réglage `sync_port`, sinon le défaut).
+
+    Un port à 0 (« au hasard », réservé aux tests) est inconnu d'un autre
+    processus : on retombe sur le port par défaut.
+    """
+    from .core.sync import DEFAULT_PORT
+
+    try:
+        port = int(settings.get("sync_port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    return port if 0 < port < 65536 else DEFAULT_PORT
+
+
+def serveur_synchro_ecoute(port: int, delai: float = 1.0) -> bool:
+    """Vrai si un serveur Triat répond sur 127.0.0.1:<port> (GET /v1/hello).
+
+    `doctor` est un processus distinct de l'app : on ne peut pas lire l'état
+    de son serveur, on s'y connecte. Connexion directe (sans proxy), délai
+    court, jamais d'exception.
+    """
+    connexion = None
+    try:
+        connexion = http.client.HTTPConnection("127.0.0.1", port, timeout=delai)
+        connexion.request("GET", "/v1/hello")
+        reponse = connexion.getresponse()
+        if reponse.status != 200:
+            return False
+        donnees = json.loads(reponse.read(4096))
+        return isinstance(donnees, dict) and donnees.get("app") == "triat"
+    except Exception:
+        return False
+    finally:
+        if connexion is not None:
+            try:
+                connexion.close()
+            except Exception:
+                pass
+
+
+def _sortie_outil(commande: list[str], lancer=subprocess.run) -> str | None:
+    """Sortie standard d'une commande, ou None si elle échoue.
+
+    Outil absent, droits insuffisants, code de retour non nul, délai de 2 s
+    dépassé : dans tous ces cas on renvoie None, jamais d'exception.
+    """
+    try:
+        # LC_ALL=C : la sortie de ufw est traduite, on veut la version anglaise.
+        resultat = lancer(commande, capture_output=True, text=True, timeout=2,
+                          check=False, env={**os.environ, "LC_ALL": "C"})
+    except Exception:
+        return None
+    if getattr(resultat, "returncode", 1) != 0:
+        return None
+    return (getattr(resultat, "stdout", "") or "").strip()
+
+
+def pare_feux_actifs(lancer=subprocess.run) -> list[str]:
+    """Noms des pare-feu actifs parmi « firewalld » et « ufw ».
+
+    `ufw status` demande souvent les droits root : sans eux il échoue et
+    ufw n'est alors pas signalé (on ne devine pas).
+    """
+    actifs = []
+    etat = _sortie_outil(["firewall-cmd", "--state"], lancer)
+    if etat is not None and etat.lower() == "running":
+        actifs.append("firewalld")
+    etat = _sortie_outil(["ufw", "status"], lancer)
+    if etat is not None and any(
+            ligne.strip().lower() == "status: active"
+            for ligne in etat.splitlines()):
+        actifs.append("ufw")
+    return actifs
+
+
+def commande_ouverture(pare_feu: str, port: int) -> str:
+    """Commande qui ouvre le port TCP `port` dans le pare-feu indiqué."""
+    if pare_feu == "ufw":
+        return f"sudo ufw allow {port}/tcp"
+    return f"sudo firewall-cmd --add-port={port}/tcp"
+
+
+def message_synchro(active: bool, ecoute: bool, pare_feux: list[str],
+                    port: int) -> tuple[str, str]:
+    """Niveau (« ok » / « warn ») et texte de la ligne « synchro ».
+
+    Fonction pure : toute la décision est ici, les sondes sont ailleurs.
+    """
+    if not active:
+        return "ok", "désactivée (Réglages › Synchronisation)"
+    if ecoute:
+        niveau, texte = "ok", f"écoute sur le port {port}"
+    else:
+        niveau = "warn"
+        texte = (f"activée mais serveur arrêté sur le port {port} "
+                 "(il démarre avec Triat ; port occupé ?)")
+    if pare_feux:
+        commandes = " ou ".join(commande_ouverture(p, port) for p in pare_feux)
+        niveau = "warn"
+        texte += (f" — pare-feu actif ({', '.join(pare_feux)}) : si le téléphone "
+                  f"ne voit pas le bureau, ouvrez le port : {commandes}")
+    return niveau, texte
+
+
+def _ligne_synchro(settings) -> tuple[str, str, str]:
+    active = bool(settings.get("sync_enabled"))
+    port = port_synchro(settings)
+    ecoute = serveur_synchro_ecoute(port) if active else False
+    pare_feux = pare_feux_actifs() if active else []
+    niveau, texte = message_synchro(active, ecoute, pare_feux, port)
+    return "synchro", niveau, texte
+
+
 def cmd_doctor(args) -> int:
     """Vérifie que toutes les briques externes répondent."""
     engine = Engine()
@@ -332,6 +452,8 @@ def cmd_doctor(args) -> int:
     else:
         checks.append(("bureau nothing", "warn",
                        "dotfiles absents — thème de Triat par défaut"))
+
+    checks.append(_ligne_synchro(engine.settings))
 
     marks = {"ok": "✓", "warn": "~", "fail": "✗"}
     width = max(len(name) for name, _, _ in checks)

@@ -42,6 +42,7 @@ def refs(n: int) -> list[TrackRef]:
 def engine(tmp_path):
     settings = Settings(tmp_path / "settings.json")
     settings.set("autoplay_radio", False)
+    settings.set("sync_port", 0)        # jamais le vrai port 47823 en test
     eng = Engine(
         settings=settings,
         library=Library(tmp_path / "lib.db"),
@@ -53,6 +54,7 @@ def engine(tmp_path):
         cookies=object(),
     )
     yield eng
+    eng.sync.stop()
     eng.library.close()
 
 
@@ -524,3 +526,64 @@ def test_play_after_restart_opens_the_restored_track(tmp_path):
     revived.toggle_pause()                       # « lecture » après redémarrage
     assert pump(lambda: revived.player.played)
     revived.library.close()
+
+
+# ---- Synchro Wi-Fi ---------------------------------------------------------
+
+def _listens(port: int) -> bool:
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def test_sync_is_off_until_enabled(engine):
+    assert engine.sync is not None
+    assert not engine.sync.running          # la construction ne démarre rien
+
+
+def test_sync_can_be_enabled_then_disabled_and_frees_the_port(engine, monkeypatch):
+    import socket
+    monkeypatch.setattr(engine.sync, "_announce", lambda: None)   # pas de mDNS
+    assert engine.set_sync_enabled(True)
+    assert engine.sync.running
+    assert engine.settings.get("sync_enabled") is True
+    assert Settings(engine.settings._path).get("sync_enabled") is True   # sauvé
+    port = engine.sync.port
+    assert port and _listens(port)
+    assert engine.set_sync_enabled(True)    # deux fois de suite : sans effet
+
+    assert not engine.set_sync_enabled(False)
+    assert not engine.sync.running
+    assert engine.settings.get("sync_enabled") is False
+    assert not _listens(port)
+    engine.set_sync_enabled(False)          # couper ce qui est coupé : rien
+    # Le port est libre : on peut s'y relier.
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("0.0.0.0", port))
+
+
+def test_shutdown_stops_the_sync_server(tmp_path, monkeypatch):
+    settings = Settings(tmp_path / "s.json")
+    settings.set("sync_port", 0)
+    eng = Engine(settings=settings, library=Library(tmp_path / "l.db"),
+                 player=FakePlayer(), extractor=FakeExtractor(),
+                 sponsorblock=FakeSponsorBlock(), recommender=FakeRecommender(),
+                 ytmusic=object(), cookies=object())
+    monkeypatch.setattr(eng.sync, "_announce", lambda: None)
+    eng.set_sync_enabled(True)
+    port = eng.sync.port
+    assert _listens(port)
+    eng.shutdown()
+    assert not eng.sync.running
+    assert not _listens(port)
+
+
+def test_a_sync_that_changes_the_library_emits_library_changed(engine):
+    changed = []
+    engine.connect("library-changed", lambda *_: changed.append(1))
+    engine.sync._on_changed({"favorites": 1})   # appelé depuis le fil du serveur
+    assert pump(lambda: changed)

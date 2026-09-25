@@ -2,6 +2,7 @@
 # à jour volontaire des dépendances, tests verts à l'appui.
 # yt-dlp reste en plancher : YouTube change souvent, il faut pouvoir suivre
 # (voir docs/po-token.md).
+cryptography==50.0.1
 jaraco.classes==3.4.0
 jaraco.context==6.1.2
 jaraco.functools==4.6.0

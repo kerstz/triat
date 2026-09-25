@@ -38,6 +38,7 @@ class TriatApp(Adw.Application):
         self._start_mini = False
         self._start_action: str | None = None
         self._quitting = False
+        self._sync_started = False
 
     # ---- Cycle de vie ----------------------------------------------------
 
@@ -140,6 +141,7 @@ class TriatApp(Adw.Application):
                 self._publish_mpris()
                 self._engine.restore_state()
                 self._schedule_backfill()
+                self._schedule_sync()
             self.open_mini()
             return
         if self._window is None:
@@ -150,6 +152,7 @@ class TriatApp(Adw.Application):
             # la fenêtre, sinon personne n'écoute et la barre reste vide.
             self._engine.restore_state()
             self._schedule_backfill()
+            self._schedule_sync()
         reactivated = self._window.get_mapped()
         self._window.present()
         if reactivated:
@@ -165,6 +168,20 @@ class TriatApp(Adw.Application):
         engine = self._engine
         GLib.timeout_add_seconds(
             8, lambda: (engine.backfill_durations_async(), False)[1])
+
+    def _schedule_sync(self) -> None:
+        """Serveur de synchro lancé une seule fois, à la première fenêtre,
+        une fois celle-ci affichée (l'annonce mDNS prend un instant)."""
+        if self._sync_started:
+            return
+        self._sync_started = True
+        GLib.idle_add(self._start_sync)
+
+    def _start_sync(self) -> bool:
+        engine = self._engine
+        if engine is not None and engine.settings.get("sync_enabled"):
+            engine.sync.start()
+        return GLib.SOURCE_REMOVE
 
     def do_shutdown(self) -> None:
         self._teardown()

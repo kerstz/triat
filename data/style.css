@@ -99,6 +99,13 @@ label, .triat-body, button, entry, text {
   font-size: 11px; color: var(--triat-dim);
 }
 
+/* Code d'appairage du téléphone : gros, en chasse fixe, groupé 4 + 4. */
+.triat-pair-code {
+  font-family: "JetBrains Mono", "JetBrainsMono NF", "Geist Mono", monospace;
+  font-size: 34px; font-weight: 600; letter-spacing: 0.08em;
+  color: var(--triat-ink);
+}
+
 /* Titres : Inter Display, serré, en casse de phrase. L'ancienne échelle
    Doto 36–76 px criait dans une fenêtre tuilée de 950 px. */
 .triat-display {

@@ -6,3 +6,4 @@ ytmusicapi>=1.12
 yt-dlp>=2026.8.19
 keyring>=25
 zeroconf>=0.140      # annonce de la synchro sur le Wi-Fi (mDNS)
+cryptography>=42     # chiffrement de la synchro (ECDH, AES-GCM)

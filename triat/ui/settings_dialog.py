@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import gi
 
@@ -20,6 +21,8 @@ from ..core.auth import CookieError
 from ..core.desktop import desktop_accent
 from ..core.scrobble import ScrobbleError
 from ..core.sponsorblock import ASK, CATEGORIES, IGNORE, SKIP
+from ..core.sync import PAIRING_SECONDS
+from ..core.sync import _local_ipv4 as local_addresses
 from .equalizer_group import EqualizerGroup
 
 log = logging.getLogger(__name__)
@@ -46,6 +49,30 @@ QUALITIES = (("low", "Basse"), ("normal", "Normale"),
              ("high", "Haute"), ("max", "Maximale"))
 
 
+def format_pairing_code(code: str) -> str:
+    """Code d'appairage groupé 4 + 4 : `ABCDEFGH` devient `ABCD-EFGH`."""
+    return f"{code[:4]}-{code[4:]}"
+
+
+def format_countdown(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    return f"Expire dans {seconds // 60}:{seconds % 60:02d}"
+
+
+def format_last_sync(when, now: float | None = None) -> str:
+    """Dernière synchro en français, relative (« il y a 5 min »)."""
+    if not when:
+        return "Jamais synchronisé"
+    elapsed = max(0, int((now if now is not None else time.time()) - float(when)))
+    if elapsed < 60:
+        return "Dernière synchro : à l'instant"
+    if elapsed < 3600:
+        return f"Dernière synchro : il y a {elapsed // 60} min"
+    if elapsed < 86400:
+        return f"Dernière synchro : il y a {elapsed // 3600} h"
+    return f"Dernière synchro : il y a {elapsed // 86400} j"
+
+
 class SettingsDialog(Adw.PreferencesDialog):
     """Réglages de Triat."""
 
@@ -60,6 +87,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         self.add(self._page_sponsorblock())
         self.add(self._page_account())
         self.add(self._page_library())
+        self.add(self._page_sync())
         self.add(self._page_system())
 
     # ---- Outils ----------------------------------------------------------
@@ -523,6 +551,192 @@ class SettingsDialog(Adw.PreferencesDialog):
         group.add(scene)
         page.add(group)
         return page
+
+    # ---- Synchronisation -------------------------------------------------
+
+    def _page_sync(self) -> Adw.PreferencesPage:
+        page = Adw.PreferencesPage(title="Synchronisation",
+                                   icon_name="triat-radio-symbolic")
+        self._pairing_dialog: Adw.AlertDialog | None = None
+        self._pairing_timer = 0
+        self._pairing_left = 0
+        self._pairing_known: set[str] = set()
+        self._device_rows: list[Adw.ActionRow] = []
+
+        group = Adw.PreferencesGroup(
+            title="Téléphone",
+            description="Favoris, playlists et historique restent identiques "
+                        "sur le bureau et sur le téléphone. Tout passe par le "
+                        "Wi-Fi local, rien ne sort sur Internet.")
+
+        self.sync_switch = Adw.SwitchRow(
+            title="Synchroniser avec le téléphone (Wi-Fi)",
+            subtitle="Le bureau attend le téléphone tant que Triat est ouvert")
+        self.sync_switch.set_active(bool(self._engine.settings.get("sync_enabled")))
+        self.sync_switch.connect("notify::active", self._on_sync_toggled)
+        group.add(self.sync_switch)
+
+        self.sync_address = Adw.ActionRow(title="Adresse du bureau")
+        self.sync_address.add_css_class("property")
+        group.add(self.sync_address)
+
+        pair = Adw.ActionRow(
+            title="Nouveau téléphone",
+            subtitle="Affiche un code à saisir sur le téléphone")
+        self.pair_button = Gtk.Button(label="Associer un téléphone",
+                                      valign=Gtk.Align.CENTER)
+        self.pair_button.add_css_class("suggested-action")
+        self.pair_button.add_css_class("pill")
+        self.pair_button.connect("clicked", self._begin_pairing)
+        pair.add_suffix(self.pair_button)
+        group.add(pair)
+        page.add(group)
+
+        self.devices_group = Adw.PreferencesGroup(
+            title="Téléphones associés",
+            description="Oublier un téléphone l'empêche de se synchroniser "
+                        "jusqu'à un nouvel appairage.")
+        page.add(self.devices_group)
+
+        cookies = Adw.PreferencesGroup(title="Session YouTube")
+        cookies.add(self._switch_row(
+            "Partager la session YouTube avec le téléphone",
+            "La session part chiffrée vers les téléphones associés, "
+            "seulement sur le Wi-Fi local",
+            "sync_share_cookies"))
+        page.add(cookies)
+
+        self._refresh_sync()
+        self._refresh_devices()
+        return page
+
+    def _on_sync_toggled(self, row: Adw.SwitchRow, _pspec) -> None:
+        on = row.get_active()
+        listening = self._engine.set_sync_enabled(on)
+        if on and not listening:
+            # Aucun port libre : on remet l'interrupteur à sa place.
+            self.add_toast(Adw.Toast(title="Synchro impossible : port indisponible"))
+            row.set_active(False)
+            return
+        self._refresh_sync()
+
+    def _refresh_sync(self) -> None:
+        """Adresse affichée et bouton d'appairage selon l'état du serveur."""
+        sync = self._engine.sync
+        running = bool(sync.running)
+        self.pair_button.set_sensitive(running)
+        if not running:
+            self.sync_address.set_subtitle(
+                "Serveur non démarré" if self.sync_switch.get_active()
+                else "Activez la synchro pour la voir")
+            return
+        addresses = local_addresses() or ["adresse inconnue"]
+        self.sync_address.set_subtitle(
+            " · ".join(f"{ip}:{sync.port}" for ip in addresses))
+
+    def _refresh_devices(self) -> None:
+        for row in self._device_rows:
+            self.devices_group.remove(row)
+        self._device_rows = []
+        devices = self._engine.sync.devices()
+        if not devices:
+            row = Adw.ActionRow(title="Aucun téléphone associé")
+            row.add_css_class("dim-label")
+            self.devices_group.add(row)
+            self._device_rows.append(row)
+            return
+        for device_id, info in sorted(
+                devices.items(), key=lambda item: item[1].get("paired_at") or 0):
+            row = Adw.ActionRow(
+                title=GLib.markup_escape_text(info.get("name") or "Téléphone"),
+                subtitle=format_last_sync(info.get("last_sync")))
+            forget = Gtk.Button(label="Oublier", valign=Gtk.Align.CENTER)
+            forget.add_css_class("destructive-action")
+            forget.add_css_class("pill")
+            forget.connect("clicked", self._forget_device, device_id)
+            row.add_suffix(forget)
+            self.devices_group.add(row)
+            self._device_rows.append(row)
+
+    def _forget_device(self, _button, device_id: str) -> None:
+        self._engine.sync.forget_device(device_id)
+        self._refresh_devices()
+
+    # -- Appairage --
+
+    def _begin_pairing(self, _button=None) -> None:
+        """Ouvre la fenêtre du code : 120 s, se ferme seule à 0 ou dès qu'un
+        nouvel appareil apparaît."""
+        sync = self._engine.sync
+        if self._pairing_dialog is not None or not sync.running:
+            return
+        self._pairing_known = set(sync.devices())
+        code = sync.begin_pairing()
+        self._pairing_left = PAIRING_SECONDS
+
+        dialog = Adw.AlertDialog(
+            heading="Associer un téléphone",
+            body="Sur le téléphone, ouvrez Triat, choisissez cet ordinateur "
+                 "puis saisissez ce code.")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                      halign=Gtk.Align.CENTER)
+        self.pairing_code_label = Gtk.Label(
+            label=format_pairing_code(code),
+            css_classes=["triat-pair-code"])
+        self.pairing_code_label.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            ["Code d'appairage : " + " ".join(code)])
+        self.pairing_countdown = Gtk.Label(
+            label=format_countdown(self._pairing_left),
+            css_classes=["triat-mono", "triat-dim"])
+        box.append(self.pairing_code_label)
+        box.append(self.pairing_countdown)
+        dialog.set_extra_child(box)
+        dialog.add_response("cancel", "Annuler")
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("closed", self._on_pairing_closed)
+        self._pairing_dialog = dialog
+        self._pairing_timer = GLib.timeout_add_seconds(1, self._tick_pairing)
+        dialog.present(self)
+
+    def _tick_pairing(self) -> bool:
+        """Une seconde de plus : appareil arrivé, ou temps écoulé."""
+        if self._pairing_dialog is None:
+            self._pairing_timer = 0
+            return GLib.SOURCE_REMOVE
+        devices = self._engine.sync.devices()
+        if set(devices) - self._pairing_known:
+            self._pairing_timer = 0
+            self._refresh_devices()
+            self.add_toast(Adw.Toast(title="Téléphone associé"))
+            self._close_pairing()
+            return GLib.SOURCE_REMOVE
+        self._pairing_left -= 1
+        if self._pairing_left <= 0:
+            self._pairing_timer = 0
+            self._close_pairing()
+            return GLib.SOURCE_REMOVE
+        self.pairing_countdown.set_label(format_countdown(self._pairing_left))
+        return GLib.SOURCE_CONTINUE
+
+    def _close_pairing(self) -> None:
+        dialog = self._pairing_dialog
+        if dialog is not None:
+            dialog.close()
+        self._on_pairing_closed(dialog)
+
+    def _on_pairing_closed(self, _dialog) -> None:
+        """Fermeture (bouton, Échap, compte à rebours ou appareil arrivé) :
+        le code ne doit plus valoir rien."""
+        if self._pairing_timer:
+            GLib.source_remove(self._pairing_timer)
+            self._pairing_timer = 0
+        if self._pairing_dialog is None:
+            return
+        self._pairing_dialog = None
+        self._engine.sync.cancel_pairing()
+        self._refresh_devices()
 
     # ---- Système ---------------------------------------------------------
 
