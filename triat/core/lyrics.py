@@ -43,6 +43,8 @@ class Lyrics:
     plain: str = ""
     instrumental: bool = False
     source: str = "LRCLIB"
+    # Service injoignable (hors ligne, panne) : l'interface propose de réessayer.
+    unreachable: bool = False
 
     @property
     def available(self) -> bool:
@@ -75,6 +77,9 @@ def parse_lrc(text: str) -> list[tuple[float, str]]:
         lines.append((stamp, content.strip()))
     lines.sort(key=lambda item: item[0])
     return lines
+
+
+_UNREACHABLE = object()      # réponse de `_call` : réseau ou serveur en panne
 
 
 class LyricsService:
@@ -151,8 +156,10 @@ class LyricsService:
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 log.info("LRCLIB HTTP %s", exc.code)
+                return _UNREACHABLE        # panne serveur : pas une absence
         except Exception as exc:
             log.debug("LRCLIB injoignable : %s", exc)
+            return _UNREACHABLE
         return None
 
     @staticmethod
@@ -195,17 +202,22 @@ class LyricsService:
             return Lyrics(video_id, False, [])
 
         entry = None
+        unreachable = False
         # Correspondance exacte d'abord : artiste + titre + durée.
         if artist and duration > 0:
             entry = self._call("get", {
                 "artist_name": artist, "track_name": title,
                 "duration": int(duration)})
+            if entry is _UNREACHABLE:
+                unreachable, entry = True, None
         if not self._plausible(entry, duration):
             entry = None
 
         if entry is None:
             results = self._call("search", {"track_name": title,
                                             **({"artist_name": artist} if artist else {})})
+            if results is _UNREACHABLE:
+                unreachable, results = True, None
             if isinstance(results, list):
                 results = [e for e in results if self._plausible(e, duration)]
             if isinstance(results, list) and results:
@@ -218,8 +230,11 @@ class LyricsService:
                     entry = results[0]
 
         if not isinstance(entry, dict):
-            self._store(video_id, "", "", False, False)
-            return Lyrics(video_id, False, [])
+            # Hors ligne ou serveur en panne : ne pas mémoriser « pas de
+            # paroles » pour 90 jours.
+            if not unreachable:
+                self._store(video_id, "", "", False, False)
+            return Lyrics(video_id, False, [], unreachable=unreachable)
 
         body = entry.get("syncedLyrics") or ""
         plain = entry.get("plainLyrics") or ""

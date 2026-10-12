@@ -15,15 +15,17 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from ..core.auth import CookieError
-from ..core.desktop import desktop_accent
+from ..core.desktop import (browser_label, desktop_accent,
+                            detect_browser_profiles, inside_flatpak)
 from ..core.scrobble import ScrobbleError
 from ..core.sponsorblock import ASK, CATEGORIES, IGNORE, SKIP
-from ..core.sync import PAIRING_SECONDS
+from ..core.sync import PAIRING_SECONDS, pairing_qr_svg, pairing_uri
 from ..core.sync import _local_ipv4 as local_addresses
 from .equalizer_group import EqualizerGroup
+from .widgets.common import plural
 
 log = logging.getLogger(__name__)
 
@@ -45,8 +47,23 @@ POLICIES = ((SKIP, "Auto"), (ASK, "Notifier"), (IGNORE, "Ignorer"))
 # Navigateurs proposés à l'import, dans l'ordre de popularité sous Linux.
 BROWSERS = ("firefox", "chromium", "brave", "vivaldi", "chrome", "edge", "opera")
 
+# Période de rafraîchissement de « dernière synchro » (page visible).
+DEVICES_REFRESH_SECONDS = 30
+
+# Délai maximal d'attente de « Compléter les durées ».
+DURATIONS_TIMEOUT = 60
+
 QUALITIES = (("low", "Basse"), ("normal", "Normale"),
              ("high", "Haute"), ("max", "Maximale"))
+
+
+def _plain_row(**kwargs) -> Adw.ActionRow:
+    """Ligne dont le texte n'est jamais lu comme du balisage Pango : un
+    chemin, un nom de téléphone ou une exception contiennent des « & » et
+    des « < » qui, sinon, vident le libellé."""
+    row = Adw.ActionRow(**kwargs)
+    row.set_use_markup(False)
+    return row
 
 
 def format_pairing_code(code: str) -> str:
@@ -154,7 +171,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         group.add(self._switch_row(
             "Sauter les segments", "Active la détection et le saut",
             "sponsorblock_enabled"))
-        anonymous = Adw.ActionRow(
+        anonymous = _plain_row(
             title="Requêtes anonymes",
             subtitle="Seuls les 4 premiers caractères du hachage partent")
         anonymous.add_suffix(Gtk.Label(label="SHA-256 · 4",
@@ -170,7 +187,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         policies = dict(self._engine.settings.get("sponsorblock_categories") or {})
         for name in CATEGORIES:
             title, subtitle = CATEGORY_LABELS.get(name, (name, ""))
-            row = Adw.ActionRow(title=title, subtitle=subtitle)
+            row = _plain_row(title=title, subtitle=subtitle)
             row.add_suffix(self._policy_chips(name, policies))
             categories.add(row)
         page.add(categories)
@@ -190,7 +207,6 @@ class SettingsDialog(Adw.PreferencesDialog):
         box.append(big)
         box.append(Gtk.Label(label="sautées depuis le lancement", xalign=0,
                              css_classes=["triat-body", "triat-dim"]))
-        plural = lambda n, w: f"{n} {w}{'s' if n > 1 else ''}"
         box.append(Gtk.Label(
             label=f"{plural(segments, 'segment')} dans {plural(tracks, 'piste')}",
             xalign=0, css_classes=["triat-mono", "triat-dim"]))
@@ -244,19 +260,22 @@ class SettingsDialog(Adw.PreferencesDialog):
             description="Sans compte, la recherche et la radio fonctionnent, "
                         "mais pas les recommandations personnalisées.")
 
-        self.status_row = Adw.ActionRow(title="Statut")
+        self.status_row = _plain_row(title="Statut")
         group.add(self.status_row)
 
-        browser = Adw.ComboRow(title="Importer depuis un navigateur",
-                               subtitle="Le navigateur doit être fermé")
+        browser = Adw.ComboRow(
+            title="Importer depuis un navigateur",
+            subtitle=("Triat tourne dans un bac à sable Flatpak : importez "
+                      "plutôt un fichier cookies.txt" if inside_flatpak()
+                      else "Le navigateur doit être fermé"))
         model = Gtk.StringList()
         for name in BROWSERS:
-            model.append(name.capitalize())
+            model.append(browser_label(name))
         browser.set_model(model)
         self._browser_row = browser
         group.add(browser)
 
-        actions = Adw.ActionRow(title="Actions")
+        actions = _plain_row(title="Actions")
         import_button = Gtk.Button(label="Importer", valign=Gtk.Align.CENTER)
         import_button.add_css_class("suggested-action")
         import_button.add_css_class("pill")
@@ -300,12 +319,19 @@ class SettingsDialog(Adw.PreferencesDialog):
 
     def _import_browser(self, button: Gtk.Button) -> None:
         name = BROWSERS[self._browser_row.get_selected()]
+        # Profil Flatpak ou Snap : yt-dlp ne le trouve pas seul.
+        profile = detect_browser_profiles([name]).get(name)
         button.set_sensitive(False)
-        self.status_row.set_subtitle(f"Lecture du profil {name}…")
+        self.status_row.set_subtitle(
+            f"Lecture du profil {browser_label(name)}…")
 
         def worker() -> None:
             try:
-                self._engine.cookies.import_from_browser(name)
+                if profile:
+                    self._engine.cookies.import_from_browser(
+                        name, profile=profile)
+                else:
+                    self._engine.cookies.import_from_browser(name)
             except CookieError as exc:
                 GLib.idle_add(self._import_done, button, str(exc))
                 return
@@ -359,6 +385,22 @@ class SettingsDialog(Adw.PreferencesDialog):
             self._on_change("cookie_source", None)
 
     def _clear_cookies(self, _button) -> None:
+        dialog = Adw.AlertDialog(
+            heading="Effacer les cookies YouTube ?",
+            body="La session est supprimée du trousseau : les "
+                 "recommandations personnalisées s'arrêtent jusqu'au "
+                 "prochain import.")
+        dialog.add_response("cancel", "Annuler")
+        dialog.add_response("clear", "Effacer")
+        dialog.set_response_appearance("clear", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_clear_cookies_response)
+        dialog.present(self)
+
+    def _on_clear_cookies_response(self, _dialog, response: str) -> None:
+        if response != "clear":
+            return
         self._engine.cookies.clear()
         self._after_cookie_change()
 
@@ -370,8 +412,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         library = self._engine.library
         group = Adw.PreferencesGroup(title="Bibliothèque")
         stats = library.stats()
-        self.library_stats = Adw.ActionRow(title="Contenu")
-        plural = lambda n, w: f"{n} {w}{'s' if n > 1 else ''}"
+        self.library_stats = _plain_row(title="Contenu")
         minutes = int(stats.get("seconds", 0) // 60)
         listened = (f"{minutes // 60} h {minutes % 60:02d}" if minutes >= 60
                     else f"{minutes} min")
@@ -383,9 +424,9 @@ class SettingsDialog(Adw.PreferencesDialog):
         group.add(self.library_stats)
 
         missing = len(library.missing_duration())
-        durations = Adw.ActionRow(
+        durations = _plain_row(
             title="Compléter les durées",
-            subtitle=(f"{missing} pistes sans durée" if missing
+            subtitle=(f"{plural(missing, 'piste')} sans durée" if missing
                       else "Toutes les durées sont connues"))
         fill = Gtk.Button(label="Compléter", valign=Gtk.Align.CENTER)
         fill.add_css_class("pill")
@@ -394,7 +435,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         durations.add_suffix(fill)
         group.add(durations)
 
-        searches = Adw.ActionRow(title="Historique de recherche",
+        searches = _plain_row(title="Historique de recherche",
                                  subtitle="Les 8 dernières requêtes, locales")
         clear_search = Gtk.Button(label="Effacer", valign=Gtk.Align.CENTER)
         clear_search.add_css_class("pill")
@@ -402,7 +443,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         searches.add_suffix(clear_search)
         group.add(searches)
 
-        plays = Adw.ActionRow(title="Historique d'écoute",
+        plays = _plain_row(title="Historique d'écoute",
                               subtitle="Alimente les mixes et « En boucle »")
         clear_plays = Gtk.Button(label="Effacer", valign=Gtk.Align.CENTER)
         clear_plays.add_css_class("pill")
@@ -419,13 +460,31 @@ class SettingsDialog(Adw.PreferencesDialog):
         row.set_subtitle("Interrogation de YouTube…")
         self._engine.backfill_durations_async()
 
-        def done(*_args) -> None:
-            left = len(self._engine.library.missing_duration())
-            row.set_subtitle(f"{left} pistes sans durée" if left
-                             else "Toutes les durées sont connues")
-            self._engine.disconnect(handler)
+        state = {"handler": 0, "timeout": 0}
 
-        handler = self._engine.connect("library-changed", done)
+        def done(*_args) -> bool:
+            # Une seule fois : « library-changed » peut venir d'ailleurs, et
+            # le repli temporel arrive après un signal déjà traité.
+            if state["handler"]:
+                self._engine.disconnect(state["handler"])
+                state["handler"] = 0
+            if state["timeout"]:
+                GLib.source_remove(state["timeout"])
+                state["timeout"] = 0
+            left = len(self._engine.library.missing_duration())
+            row.set_subtitle(f"{plural(left, 'piste')} sans durée" if left
+                             else "Toutes les durées sont connues")
+            button.set_sensitive(bool(left))
+            return GLib.SOURCE_REMOVE
+
+        def on_timeout() -> bool:
+            state["timeout"] = 0
+            return done()
+
+        state["handler"] = self._engine.connect("library-changed", done)
+        # Repli : si la complétion n'émet rien (hors ligne, rien à écrire),
+        # le gestionnaire ne doit pas rester branché indéfiniment.
+        state["timeout"] = GLib.timeout_add_seconds(DURATIONS_TIMEOUT, on_timeout)
 
     def _clear_searches(self, button: Gtk.Button) -> None:
         self._save("search_history", [])
@@ -458,13 +517,13 @@ class SettingsDialog(Adw.PreferencesDialog):
                         "se trouve sur listenbrainz.org, dans vos réglages "
                         "de profil.")
 
-        self.scrobble_status = Adw.ActionRow(title="État")
+        self.scrobble_status = _plain_row(title="État")
         group.add(self.scrobble_status)
 
         self._token_entry = Adw.PasswordEntryRow(title="Jeton")
         group.add(self._token_entry)
 
-        actions = Adw.ActionRow(title="Actions")
+        actions = _plain_row(title="Actions")
         connect = Gtk.Button(label="Connecter", valign=Gtk.Align.CENTER)
         connect.add_css_class("suggested-action")
         connect.add_css_class("pill")
@@ -562,6 +621,9 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._pairing_left = 0
         self._pairing_known: set[str] = set()
         self._device_rows: list[Adw.ActionRow] = []
+        self._device_ids: dict[Adw.ActionRow, str] = {}
+        self._devices_timer = 0
+        self._addresses: list[str] = []
 
         group = Adw.PreferencesGroup(
             title="Téléphone",
@@ -576,11 +638,20 @@ class SettingsDialog(Adw.PreferencesDialog):
         self.sync_switch.connect("notify::active", self._on_sync_toggled)
         group.add(self.sync_switch)
 
-        self.sync_address = Adw.ActionRow(title="Adresse du bureau")
+        self.sync_address = _plain_row(title="Adresse du bureau")
         self.sync_address.add_css_class("property")
+        self.copy_address_button = Gtk.Button(
+            label="Copier", valign=Gtk.Align.CENTER,
+            tooltip_text="Copier les adresses")
+        self.copy_address_button.add_css_class("pill")
+        self.copy_address_button.update_property(
+            [Gtk.AccessibleProperty.LABEL], ["Copier les adresses"])
+        self.copy_address_button.set_sensitive(False)
+        self.copy_address_button.connect("clicked", self._copy_addresses)
+        self.sync_address.add_suffix(self.copy_address_button)
         group.add(self.sync_address)
 
-        pair = Adw.ActionRow(
+        pair = _plain_row(
             title="Nouveau téléphone",
             subtitle="Affiche un code à saisir sur le téléphone")
         self.pair_button = Gtk.Button(label="Associer un téléphone",
@@ -590,6 +661,24 @@ class SettingsDialog(Adw.PreferencesDialog):
         self.pair_button.connect("clicked", self._begin_pairing)
         pair.add_suffix(self.pair_button)
         group.add(pair)
+
+        directions = (("both", "Bidirectionnel"),
+                      ("from_phone", "Téléphone vers PC"),
+                      ("to_phone", "PC vers téléphone"))
+        direction = Adw.ComboRow(
+            title="Sens de la synchro",
+            subtitle="Bidirectionnel : les deux côtés restent identiques. "
+                     "Sinon, un seul côté reçoit les nouveautés de l'autre.")
+        dir_model = Gtk.StringList()
+        for _value, name in directions:
+            dir_model.append(name)
+        direction.set_model(dir_model)
+        current_dir = self._engine.settings.get("sync_direction")
+        direction.set_selected(next((i for i, (v, _) in enumerate(directions)
+                                     if v == current_dir), 0))
+        direction.connect("notify::selected", lambda r, _p: self._save(
+            "sync_direction", directions[r.get_selected()][0]))
+        group.add(direction)
         page.add(group)
 
         self.devices_group = Adw.PreferencesGroup(
@@ -605,6 +694,12 @@ class SettingsDialog(Adw.PreferencesDialog):
             "seulement sur le Wi-Fi local",
             "sync_share_cookies"))
         page.add(cookies)
+
+        # La mention « dernière synchro » vieillit : on la rafraîchit tant
+        # que la page est visible, et plus du tout ensuite.
+        page.connect("map", lambda *_: self._start_devices_timer())
+        page.connect("unmap", lambda *_: self._stop_devices_timer())
+        self.connect("closed", lambda *_: self._stop_devices_timer())
 
         self._refresh_sync()
         self._refresh_devices()
@@ -626,29 +721,67 @@ class SettingsDialog(Adw.PreferencesDialog):
         running = bool(sync.running)
         self.pair_button.set_sensitive(running)
         if not running:
+            self._addresses = []
+            self.copy_address_button.set_sensitive(False)
             self.sync_address.set_subtitle(
                 "Serveur non démarré" if self.sync_switch.get_active()
                 else "Activez la synchro pour la voir")
             return
-        addresses = local_addresses() or ["adresse inconnue"]
+        # Déjà filtrées par le moteur (ni Docker, ni VPN) ; la route par
+        # défaut vient en premier.
+        addresses = local_addresses()
+        self._addresses = [f"{ip}:{sync.port}" for ip in addresses]
+        self.copy_address_button.set_sensitive(bool(self._addresses))
         self.sync_address.set_subtitle(
-            " · ".join(f"{ip}:{sync.port}" for ip in addresses))
+            ", ".join(self._addresses) or "adresse inconnue")
+
+    def _copy_addresses(self, _button=None) -> None:
+        if not self._addresses:
+            return
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_clipboard().set(", ".join(self._addresses))
+        self.add_toast(Adw.Toast(title="Adresses copiées", use_markup=False))
+
+    def _start_devices_timer(self) -> None:
+        if not self._devices_timer:
+            self._devices_timer = GLib.timeout_add_seconds(
+                DEVICES_REFRESH_SECONDS, self._tick_devices)
+
+    def _stop_devices_timer(self) -> None:
+        if self._devices_timer:
+            GLib.source_remove(self._devices_timer)
+            self._devices_timer = 0
+
+    def _tick_devices(self) -> bool:
+        self._refresh_last_sync()
+        return GLib.SOURCE_CONTINUE
+
+    def _refresh_last_sync(self) -> None:
+        """Remet à jour « dernière synchro » sans reconstruire les lignes
+        (le focus clavier sur « Oublier » ne doit pas sauter)."""
+        devices = self._engine.sync.devices()
+        for row, device_id in self._device_ids.items():
+            info = devices.get(device_id)
+            if info is not None:
+                row.set_subtitle(format_last_sync(info.get("last_sync")))
 
     def _refresh_devices(self) -> None:
         for row in self._device_rows:
             self.devices_group.remove(row)
         self._device_rows = []
+        self._device_ids = {}
         devices = self._engine.sync.devices()
         if not devices:
-            row = Adw.ActionRow(title="Aucun téléphone associé")
+            row = _plain_row(title="Aucun téléphone associé")
             row.add_css_class("dim-label")
             self.devices_group.add(row)
             self._device_rows.append(row)
             return
         for device_id, info in sorted(
                 devices.items(), key=lambda item: item[1].get("paired_at") or 0):
-            row = Adw.ActionRow(
-                title=GLib.markup_escape_text(info.get("name") or "Téléphone"),
+            row = _plain_row(
+                title=info.get("name") or "Téléphone",
                 subtitle=format_last_sync(info.get("last_sync")))
             forget = Gtk.Button(label="Oublier", valign=Gtk.Align.CENTER)
             forget.add_css_class("destructive-action")
@@ -657,6 +790,7 @@ class SettingsDialog(Adw.PreferencesDialog):
             row.add_suffix(forget)
             self.devices_group.add(row)
             self._device_rows.append(row)
+            self._device_ids[row] = device_id
 
     def _forget_device(self, _button, device_id: str) -> None:
         self._engine.sync.forget_device(device_id)
@@ -676,8 +810,8 @@ class SettingsDialog(Adw.PreferencesDialog):
 
         dialog = Adw.AlertDialog(
             heading="Associer un téléphone",
-            body="Sur le téléphone, ouvrez Triat, choisissez cet ordinateur "
-                 "puis saisissez ce code.")
+            body="Sur le téléphone, ouvrez Triat > Ordinateur et scannez le QR "
+                 "code, ou choisissez cet ordinateur et saisissez le code.")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
                       halign=Gtk.Align.CENTER)
         self.pairing_code_label = Gtk.Label(
@@ -689,6 +823,9 @@ class SettingsDialog(Adw.PreferencesDialog):
         self.pairing_countdown = Gtk.Label(
             label=format_countdown(self._pairing_left),
             css_classes=["triat-mono", "triat-dim"])
+        qr = self._pairing_qr(code)
+        if qr is not None:
+            box.append(qr)
         box.append(self.pairing_code_label)
         box.append(self.pairing_countdown)
         dialog.set_extra_child(box)
@@ -699,6 +836,30 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._pairing_dialog = dialog
         self._pairing_timer = GLib.timeout_add_seconds(1, self._tick_pairing)
         dialog.present(self)
+
+    def _pairing_qr(self, code: str):
+        """QR d'appairage 200×200 sur fond blanc, ou None."""
+        sync = self._engine.sync
+        hosts = local_addresses()
+        if not hosts:
+            return None
+        # Toutes les adresses utilisables : le téléphone essaie chacune,
+        # celle de la route par défaut d'abord.
+        svg = pairing_qr_svg(pairing_uri(
+            hosts, sync.port, code, sync.settings.get("sync_server_id")))
+        if svg is None:
+            return None
+        try:
+            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(svg))
+        except GLib.Error:
+            return None
+        pic = Gtk.Picture.new_for_paintable(texture)
+        pic.set_size_request(200, 200)
+        pic.set_can_shrink(False)
+        pic.add_css_class("triat-pair-qr")
+        pic.update_property([Gtk.AccessibleProperty.LABEL],
+                            ["QR code d'appairage"])
+        return pic
 
     def _tick_pairing(self) -> bool:
         """Une seconde de plus : appareil arrivé, ou temps écoulé."""
@@ -711,6 +872,11 @@ class SettingsDialog(Adw.PreferencesDialog):
             self._refresh_devices()
             self.add_toast(Adw.Toast(title="Téléphone associé"))
             self._close_pairing()
+            return GLib.SOURCE_REMOVE
+        if not self._engine.sync.pairing_active:
+            # Expiré ou annulé côté serveur : le compte à rebours mentirait.
+            self._pairing_timer = 0
+            self.pairing_countdown.set_label("Appairage fermé : relancez-le")
             return GLib.SOURCE_REMOVE
         self._pairing_left -= 1
         if self._pairing_left <= 0:
@@ -749,7 +915,16 @@ class SettingsDialog(Adw.PreferencesDialog):
             "N'enregistre rien dans l'historique d'écoute",
             "private_session"))
 
-        wipe = Adw.ActionRow(
+        self.blocked_row = _plain_row(
+            title="Recommandations écartées",
+            subtitle=self._blocked_summary())
+        manage = Gtk.Button(label="Gérer", valign=Gtk.Align.CENTER)
+        manage.add_css_class("pill")
+        manage.connect("clicked", self._manage_blocked)
+        self.blocked_row.add_suffix(manage)
+        group.add(self.blocked_row)
+
+        wipe = _plain_row(
             title="Effacer toutes mes données",
             subtitle="Bibliothèque, playlists, historique et cookies")
         button = Gtk.Button(label="Tout effacer", valign=Gtk.Align.CENTER)
@@ -761,11 +936,66 @@ class SettingsDialog(Adw.PreferencesDialog):
         page.add(group)
         return page
 
+    def _blocked_summary(self) -> str:
+        blocked = self._engine.library.blocked()
+        tracks, artists = len(blocked["track"]), len(blocked["artist"])
+        if not tracks and not artists:
+            return "Rien n'est écarté des suggestions"
+        return f"{plural(tracks, 'titre')} et {plural(artists, 'artiste')}"
+
+    def _manage_blocked(self, _button=None) -> None:
+        """Liste des titres et artistes écartés, chacun avec « Retirer »."""
+        library = self._engine.library
+        dialog = Adw.AlertDialog(
+            heading="Recommandations écartées",
+            body="Ces titres et artistes ne sont plus proposés dans les "
+                 "mixes, la radio ni les suggestions. La lecture, la "
+                 "recherche et vos playlists ne changent pas.")
+        listing = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        listing.add_css_class("boxed-list")
+        empty = _plain_row(title="Rien n'est écarté")
+        scroller = Gtk.ScrolledWindow(min_content_height=60,
+                                      max_content_height=320,
+                                      propagate_natural_height=True)
+        scroller.set_child(listing)
+        rows: list = []
+
+        def refresh_empty() -> None:
+            empty.set_visible(not rows)
+            self.blocked_row.set_subtitle(self._blocked_summary())
+
+        def remove(_button, kind: str, key: str, row) -> None:
+            library.unblock(kind, key)
+            listing.remove(row)
+            rows.remove(row)
+            refresh_empty()
+            if self._on_change is not None:
+                self._on_change("blocklist", True)
+
+        blocked = library.blocked()
+        for kind, noun in (("artist", "Artiste"), ("track", "Titre")):
+            for key, name in blocked[kind].items():
+                row = _plain_row(title=name or key, subtitle=noun)
+                undo = Gtk.Button(label="Retirer", valign=Gtk.Align.CENTER)
+                undo.add_css_class("flat")
+                undo.connect("clicked", remove, kind, key, row)
+                row.add_suffix(undo)
+                listing.append(row)
+                rows.append(row)
+        listing.append(empty)
+        refresh_empty()
+        dialog.set_extra_child(scroller)
+        dialog.add_response("close", "Fermer")
+        dialog.set_default_response("close")
+        dialog.set_close_response("close")
+        self.blocked_dialog = dialog
+        dialog.present(self)
+
     def _confirm_wipe(self, _button) -> None:
         dialog = Adw.AlertDialog(
             heading="Effacer toutes vos données ?",
-            body="Bibliothèque, playlists, historique et cookies seront "
-                 "supprimés. Cette action est irréversible.")
+            body="Bibliothèque, playlists, historique, cookies et téléphones "
+                 "appairés seront supprimés. Cette action est irréversible.")
         dialog.add_response("cancel", "Annuler")
         dialog.add_response("wipe", "Tout effacer")
         dialog.set_response_appearance("wipe", Adw.ResponseAppearance.DESTRUCTIVE)
@@ -777,8 +1007,16 @@ class SettingsDialog(Adw.PreferencesDialog):
     def _on_wipe_response(self, _dialog, response: str) -> None:
         if response != "wipe":
             return
-        self._engine.library.wipe()
-        self._engine.cookies.clear()
+        self._engine.wipe_user_data()
+        # Le moteur a coupé la synchro et oublié les téléphones : l'écran
+        # doit le refléter.
+        self.sync_switch.handler_block_by_func(self._on_sync_toggled)
+        try:
+            self.sync_switch.set_active(False)
+        finally:
+            self.sync_switch.handler_unblock_by_func(self._on_sync_toggled)
+        self._refresh_sync()
+        self._refresh_devices()
         self._after_cookie_change()
         if self._on_change is not None:
             self._on_change("wiped", True)

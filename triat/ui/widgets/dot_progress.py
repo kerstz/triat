@@ -18,6 +18,13 @@ HEAD_FILL = "#ffffff"
 SEEK_KEY_STEP = 5.0
 
 
+def _clock(seconds: float) -> str:
+    total = int(max(seconds, 0))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
 def rgba(spec: str, alpha: float = 1.0) -> Gdk.RGBA:
     color = Gdk.RGBA()
     color.parse(spec)
@@ -34,8 +41,23 @@ class DotProgressBar(Gtk.Widget):
         "seek-requested": (GObject.SignalFlags.RUN_FIRST, None, (float,)),
     }
 
-    position = GObject.Property(type=float, default=0.0)   # secondes
     duration = GObject.Property(type=float, default=0.0)   # secondes
+
+    _position = 0.0
+    _dragging = False
+    _drag_moved = False
+
+    @GObject.Property(type=float, default=0.0)             # secondes
+    def position(self) -> float:
+        return self._position
+
+    @position.setter
+    def position(self, value: float) -> None:
+        # Pendant un glissement, la tête suit le doigt : les positions du
+        # moteur (5 par seconde) ne doivent pas la ramener en arrière.
+        if self._dragging:
+            return
+        self._position = value
 
     def __init__(self, step: float = 6.0, radius: float = 1.5,
                  height: int = 10, show_head: bool = True) -> None:
@@ -47,7 +69,7 @@ class DotProgressBar(Gtk.Widget):
         self.show_head = show_head
         # (début, fin, opacité) en secondes — segments SponsorBlock.
         self.segments: list[tuple[float, float, float]] = []
-        self._dragging = False
+        self._a11y_key = None
 
         self.add_css_class("triat-progress")
         self.set_size_request(-1, max(height, 16))
@@ -61,7 +83,7 @@ class DotProgressBar(Gtk.Widget):
             self.connect(f"notify::{prop}", lambda *_: self._maybe_redraw())
 
         click = Gtk.GestureClick()
-        click.connect("pressed", self._on_pressed)
+        click.connect("released", self._on_released)
         self.add_controller(click)
 
         drag = Gtk.GestureDrag()
@@ -75,6 +97,7 @@ class DotProgressBar(Gtk.Widget):
         self.add_controller(keys)
 
         self._update_accessible()
+        self._update_value()
 
     # ---- API ------------------------------------------------------------
 
@@ -84,6 +107,7 @@ class DotProgressBar(Gtk.Widget):
         self.queue_draw()
 
     def clear(self) -> None:
+        self._dragging = False
         self.segments = []
         self.props.position = 0.0
         self.props.duration = 0.0
@@ -99,6 +123,7 @@ class DotProgressBar(Gtk.Widget):
         if key != self._drawn_key:
             self._drawn_key = key
             self.queue_draw()
+        self._update_value()
 
     def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:
         width = self.get_width()
@@ -154,22 +179,38 @@ class DotProgressBar(Gtk.Widget):
         ratio = min(max(x / width, 0.0), 1.0)
         return ratio * max(self.props.duration, 0.0)
 
-    def _on_pressed(self, _gesture, _n_press: int, x: float, _y: float) -> None:
+    def _preview(self, value: float) -> None:
+        """Déplace la tête sans passer par le filtre du glissement."""
+        self._position = value
+        self.notify("position")
+
+    def _on_released(self, _gesture, _n_press: int, x: float, _y: float) -> None:
+        # Un clic simple cherche à la relâche ; un glissement cherche une
+        # seule fois, à sa fin (`_on_drag_end`), pas deux.
         self.grab_focus()
+        if self._drag_moved:
+            return
         if self.props.duration > 0:
             self.emit("seek-requested", self._position_at(x))
 
     def _on_drag_begin(self, _gesture, _x: float, _y: float) -> None:
-        self._dragging = True
+        self._drag_moved = False
 
     def _on_drag_update(self, gesture, offset_x: float, _offset_y: float) -> None:
+        if abs(offset_x) < 3 and not self._dragging:
+            return
+        self._dragging = True
+        self._drag_moved = True
         ok, start_x, _ = gesture.get_start_point()
         if ok and self.props.duration > 0:
             # Aperçu immédiat : la position suit le doigt sans attendre le moteur.
-            self.props.position = self._position_at(start_x + offset_x)
+            self._preview(self._position_at(start_x + offset_x))
 
     def _on_drag_end(self, gesture, offset_x: float, _offset_y: float) -> None:
+        was_dragging = self._dragging
         self._dragging = False
+        if not was_dragging:
+            return
         ok, start_x, _ = gesture.get_start_point()
         if ok and self.props.duration > 0:
             self.emit("seek-requested", self._position_at(start_x + offset_x))
@@ -198,6 +239,21 @@ class DotProgressBar(Gtk.Widget):
     def _update_accessible(self) -> None:
         self.update_property(
             [Gtk.AccessibleProperty.LABEL], ["Progression de la lecture"])
+
+    def _update_value(self) -> None:
+        """Valeur courante pour les lecteurs d'écran, à la seconde près."""
+        duration = max(self.props.duration, 0.0)
+        position = min(max(self.props.position, 0.0), duration) if duration \
+            else 0.0
+        key = (int(position), int(duration))
+        if key == self._a11y_key:
+            return
+        self._a11y_key = key
+        self.update_property(
+            [Gtk.AccessibleProperty.VALUE_MIN, Gtk.AccessibleProperty.VALUE_MAX,
+             Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+            [0.0, duration, position,
+             f"{_clock(position)} sur {_clock(duration)}"])
 
     def do_measure(self, orientation, _for_size):
         if orientation == Gtk.Orientation.VERTICAL:

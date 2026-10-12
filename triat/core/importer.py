@@ -101,7 +101,8 @@ def split_artist_title(title: str, channel: str) -> tuple[str, str]:
                 continue
             # « Titre - Artiste » existe aussi : si le côté droit est le nom
             # de la chaîne, c'est lui l'artiste, pas le côté gauche.
-            normalise = lambda value: re.sub(r"\W+", "", value).lower()
+            def normalise(value):
+                return re.sub(r"\W+", "", value).lower()
             if channel and normalise(right) == normalise(channel):
                 return right, left
             return left, right
@@ -144,6 +145,8 @@ def fetch_metadata(video_id: str, timeout: float = TIMEOUT) -> TrackRef:
             f"{OEMBED_URL}?{query}", headers={"User-Agent": USER_AGENT})
         with urlopen_checked(request, timeout, ("youtube.com",)) as response:
             payload = json.loads(response.read(64 * 1024).decode("utf-8", "replace"))
+        if not isinstance(payload, dict):
+            raise ValueError("réponse oEmbed inattendue")
     except Exception as exc:
         log.debug("oEmbed indisponible pour %s : %s", video_id, exc)
         return TrackRef(video_id=video_id, title=video_id)
@@ -225,9 +228,11 @@ def export_playlist(refs, path, fmt: str | None = None) -> Path:
         lines = ["#EXTM3U"]
         for ref in refs:
             duration = int(ref.duration) if ref.duration else -1
-            artist = ref.artist or ""
+            # Un saut de ligne dans un titre injecterait des directives M3U.
+            artist = " ".join((ref.artist or "").split())
+            title = " ".join((ref.title or "").split())
             lines.append(f"#EXTINF:{duration},"
-                         + (f"{artist} - {ref.title}" if artist else ref.title))
+                         + (f"{artist} - {title}" if artist else title))
             lines.append(ref.url)
         body = "\n".join(lines) + "\n"
     elif fmt == "txt":

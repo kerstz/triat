@@ -57,7 +57,7 @@ def test_install_is_idempotent_and_removable(tmp_path):
 
 def test_desktop_entry_launches_triat():
     entry = (ROOT / "packaging/flatpak/org.triat.Triat.desktop").read_text()
-    assert "Exec=triat %U" in entry and "StartupWMClass=org.triat.Triat" in entry
+    assert "Exec=triat\n" in entry and "%U" not in entry and "StartupWMClass=org.triat.Triat" in entry
     assert (ROOT / "data/icons/hicolor/scalable/apps/org.triat.Triat.svg").exists()
 
 

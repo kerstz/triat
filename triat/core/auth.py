@@ -10,6 +10,7 @@ Il n'est jamais journalisé.
 from __future__ import annotations
 
 import hashlib
+import io
 import http.cookiejar
 import json
 import logging
@@ -137,6 +138,13 @@ def _parse_netscape(text: str) -> list[list[str]]:
     return rows
 
 
+def _is_youtube_domain(domain: str) -> bool:
+    """`.youtube.com` ou `music.youtube.com`, pas `notyoutube.com`."""
+    host = (domain or "").lstrip(".").lower()
+    return any(host == d.lstrip(".") or host.endswith("." + d.lstrip("."))
+               for d in YOUTUBE_DOMAINS)
+
+
 class CookieManager:
     """Source unique de vérité pour les cookies, côté yt-dlp comme ytmusicapi."""
 
@@ -185,7 +193,7 @@ class CookieManager:
 
         relevant = http.cookiejar.MozillaCookieJar()
         for cookie in jar:
-            if any(cookie.domain.endswith(d.lstrip(".")) for d in YOUTUBE_DOMAINS):
+            if _is_youtube_domain(cookie.domain):
                 relevant.set_cookie(cookie)
         if not list(relevant):
             raise CookieError(
@@ -232,8 +240,25 @@ class CookieManager:
         return str(self._runtime_path)
 
     def ytdlp_opts(self) -> dict:
-        path = self.cookie_file()
-        return {"cookiefile": path} if path else {}
+        """Options yt-dlp liées aux cookies : aucune. yt-dlp réécrit son
+        `cookiefile` à chaque appel (en suivant les liens symboliques, depuis
+        plusieurs fils) ; les cookies sont donc chargés en mémoire, voir
+        `load_into`."""
+        return {}
+
+    def load_into(self, ydl) -> bool:
+        """Charge les cookies dans un `YoutubeDL`, sans fichier sur disque."""
+        text = self._load()
+        if not text:
+            return False
+        try:
+            # `load` accepte un objet fichier : rien n'est écrit sur disque.
+            ydl.cookiejar.load(io.StringIO(text), ignore_discard=True,
+                               ignore_expires=True)
+        except Exception as exc:
+            log.warning("Cookies non chargés dans yt-dlp : %s", exc)
+            return False
+        return True
 
     def cookie_header(self) -> str | None:
         """En-tête `Cookie:` pour ytmusicapi. None si pas de cookies."""
@@ -246,7 +271,7 @@ class CookieManager:
             domain, _flag, _path, _secure, _expires, name, value = fields
             if name in seen or name not in USEFUL_COOKIES:
                 continue
-            if any(domain.endswith(d.lstrip(".")) for d in YOUTUBE_DOMAINS):
+            if _is_youtube_domain(domain):
                 seen.add(name)
                 pairs.append(f"{name}={value}")
         return "; ".join(pairs) if pairs else None

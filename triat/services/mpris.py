@@ -76,6 +76,9 @@ INTROSPECTION = """
 </node>
 """
 
+# Écart de position (s) au-delà duquel on annonce un « Seeked ».
+SEEK_JUMP = 1.0
+
 LOOP_TO_REPEAT = {"None": "off", "Track": "one", "Playlist": "all"}
 REPEAT_TO_LOOP = {v: k for k, v in LOOP_TO_REPEAT.items()}
 
@@ -98,6 +101,8 @@ class MprisService:
         self._registration = 0
         self._player_registration = 0
         self._node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION)
+        # Dernière position vue : un saut de plus d'une seconde est un seek.
+        self._last_position: float | None = None
 
     # ---- Cycle de vie ---------------------------------------------------
 
@@ -159,6 +164,21 @@ class MprisService:
         e.connect("duration-changed", lambda *_: self._changed(["Metadata"]))
         e.connect("queue-changed", lambda *_: self._changed(
             ["CanGoNext", "CanGoPrevious"]))
+        # Volume, aléatoire et répétition changés depuis l'interface.
+        e.connect("options-changed", lambda *_: self._changed(
+            ["Volume", "Shuffle", "LoopStatus"]))
+        e.connect("position-changed", self._on_position)
+        e.connect("track-changed", self._on_track_reset)
+
+    def _on_track_reset(self, *_args) -> None:
+        self._last_position = None
+
+    def _on_position(self, _engine, position: float) -> None:
+        """Seeked : un saut de position (barre, segment sauté, SetPosition)
+        n'est sinon pas annoncé, et les barres du bureau dérivent."""
+        last, self._last_position = self._last_position, position
+        if last is not None and abs(position - last) > SEEK_JUMP:
+            self.emit_seeked(position)
 
     # ---- Émission -------------------------------------------------------
 
@@ -198,11 +218,12 @@ class MprisService:
         try:
             if interface == ROOT_IFACE:
                 if method == "Raise" and self._app is not None:
-                    window = self._app.get_active_window()
-                    if window is not None:
-                        window.present()
+                    # activate() ramène la fenêtre principale (pas le mini)
+                    # et applique la correction de focus Hyprland.
+                    self._app.activate()
                 elif method == "Quit" and self._app is not None:
-                    self._app.quit()
+                    # Après la réponse D-Bus : le démontage retire l'objet.
+                    GLib.idle_add(self._quit_app)
             elif interface == PLAYER_IFACE:
                 if method == "Next":
                     engine.next()
@@ -220,10 +241,13 @@ class MprisService:
                     engine.stop()
                 elif method == "Seek":
                     offset = params.unpack()[0] / 1e6
-                    engine.seek(max(0.0, engine.player.position_hint + offset))
+                    target = max(0.0, engine.player.position_hint + offset)
+                    self._last_position = target
+                    engine.seek(target)
+                    self.emit_seeked(target)
                 elif method == "SetPosition":
-                    _track_id, position = params.unpack()
-                    engine.seek(position / 1e6)
+                    track_id, position = params.unpack()
+                    self._set_position(track_id, position)
                 elif method == "OpenUri":
                     # N'importe quelle application du bus de session peut
                     # appeler OpenUri : on n'accepte que les schémas déclarés
@@ -237,6 +261,27 @@ class MprisService:
         except Exception as exc:
             log.warning("Appel MPRIS %s.%s échoué: %s", interface, method, exc)
             invocation.return_value(None)
+
+    def _set_position(self, track_id: str, position: int) -> None:
+        """SetPosition : ignoré si la piste n'est plus la courante ou si la
+        position sort de la durée (spec MPRIS)."""
+        ref = self._engine.current
+        if ref is None or track_id != track_object_path(ref.video_id):
+            return
+        duration = self._engine.player.duration or ref.duration or 0.0
+        if position < 0 or (duration > 0 and position > duration * 1e6):
+            return
+        seconds = position / 1e6
+        self._last_position = seconds
+        self._engine.seek(seconds)
+        self.emit_seeked(seconds)
+
+    def _quit_app(self) -> bool:
+        app = self._app
+        if app is not None:
+            quit_for_real = getattr(app, "quit_for_real", None)
+            (quit_for_real or app.quit)()
+        return GLib.SOURCE_REMOVE
 
     # ---- Propriétés ------------------------------------------------------
 
@@ -253,14 +298,12 @@ class MprisService:
         engine = self._engine
         try:
             if name == "Volume":
+                # Le moteur émet « options-changed » : PropertiesChanged suit.
                 engine.set_volume(max(0.0, min(1.0, value.get_double())) * 100)
-                self._changed(["Volume"])
             elif name == "Shuffle":
                 engine.shuffle = value.get_boolean()
-                self._changed(["Shuffle"])
             elif name == "LoopStatus":
                 engine.repeat = LOOP_TO_REPEAT.get(value.get_string(), "off")
-                self._changed(["LoopStatus"])
             else:
                 return False
         except Exception as exc:

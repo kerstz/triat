@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from urllib.parse import parse_qs, urlsplit
 
 from gi.repository import GLib, GObject
 
@@ -22,7 +24,8 @@ from .lyrics import LyricsService
 from .models import Segment, Track, TrackRef
 from .player import Player
 from .queue import Queue
-from .recommend import Recommender
+from .recommend import RADIO_CONTEXT, Recommender
+from .reco import is_blocked
 from . import search_results
 from .scrobble import Scrobbler
 from .settings import Settings
@@ -36,6 +39,27 @@ log = logging.getLogger(__name__)
 RESTART_THRESHOLD = 3.0
 # Marge avant la fin d'une piste pour déclencher la radio automatique.
 AUTOPLAY_REFILL = 2
+# Une URL résolue d'avance plus vieille que cela (ou proche de son `expire`)
+# est jetée : googlevideo la refuserait.
+PREFETCH_MAX_AGE = 3600.0
+EXPIRY_MARGIN = 600.0
+# Au-delà de cette position, une piste est considérée comme réellement lue.
+FAILURE_RESET_POSITION = 5.0
+# Un « suivant » avant cette part de la piste compte comme un saut (signal
+# négatif des recommandations ; l'historique, lui, ne change pas).
+SKIP_RATIO = 0.3
+# Après une radio vide, on ne réessaie pas avant ce délai (secondes) : le
+# réseau peut revenir pendant une longue piste.
+AUTOPLAY_RETRY = 60.0
+
+
+def _expires_soon(url: str) -> bool:
+    """True si l'URL googlevideo expire dans moins de dix minutes."""
+    try:
+        values = parse_qs(urlsplit(url).query).get("expire")
+        return bool(values) and int(values[0]) - time.time() < EXPIRY_MARGIN
+    except (ValueError, TypeError):
+        return False
 
 
 class Engine(GObject.Object):
@@ -56,6 +80,9 @@ class Engine(GObject.Object):
         "video-changed": (GObject.SignalFlags.RUN_FIRST, None, (str, object)),
         # Métadonnées de la bibliothèque complétées en arrière-plan
         "library-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        # Volume, aléatoire ou répétition modifiés (interface, MPRIS, touches) :
+        # chaque vue et MPRIS se resynchronisent sur ce signal.
+        "options-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }
 
     def __init__(self, settings: Settings | None = None,
@@ -76,7 +103,8 @@ class Engine(GObject.Object):
         self.ytmusic = ytmusic or YTMusicService(self.cookies)
         self.innertube = innertube or InnerTube(self.cookies, self.settings)
         self.recommender = recommender or Recommender(
-            self.library, self.ytmusic, self.extractor, self.innertube)
+            self.library, self.ytmusic, self.extractor, self.innertube,
+            is_private=lambda: bool(self.settings.get("private_session")))
         self.sponsorblock = sponsorblock or SponsorBlockClient(self.library)
         self.lyrics = LyricsService(self.library)
         self.scrobbler = Scrobbler(self.settings)
@@ -105,8 +133,27 @@ class Engine(GObject.Object):
         self._busy = False
         # URL de flux déjà résolue pour la piste suivante, afin d'enchaîner
         # sans le temps mort d'un appel réseau.
-        self._prefetched: tuple[str, Track] | None = None
+        self._prefetched: tuple[str, Track, float] | None = None
         self._prefetching = False
+        # Identifiant de la piste réellement confiée au lecteur : tant que la
+        # nouvelle n'est pas résolue, l'ancienne joue encore et ses
+        # événements ne doivent pas être crédités à la nouvelle.
+        self._playing_id: str | None = None
+        self._retried_token = -1
+        # Échecs consécutifs sans qu'une piste ait réellement joué : borne
+        # l'enchaînement automatique quand tout est illisible.
+        self._failures = 0
+        # Position restaurée au lancement, consommée une seule fois par
+        # `resume` (l'autosauvegarde ne doit pas la rejouer plus tard).
+        self._restore_position = 0.0
+        self._autoplay_failed_for: str | None = None
+        self._autoplay_retry_at = 0.0
+        self._clock = time.monotonic      # remplaçable dans les tests
+        # Pistes ajoutées par la radio (et non par l'utilisateur) : un saut
+        # y est noté « radio », et « ne plus recommander » peut les retirer.
+        self._radio_ids: set[str] = set()
+        # Raison de la dernière radio, pour « Lecture en cours ».
+        self.radio_reason = ""
         self._video_wanted = False
         self._video_state = "off"
 
@@ -115,6 +162,10 @@ class Engine(GObject.Object):
         self.player.set_volume(float(self.settings.get("volume")))
         self.player.set_normalisation(bool(self.settings.get("normalise_volume")))
         self._apply_equalizer()
+
+        # Une session qui s'éteint sans prévenir (déconnexion, SIGKILL) ne
+        # doit pas faire perdre la file ni la position.
+        GLib.timeout_add_seconds(30, self._autosave)
 
         self.queue.connect("current-changed", self._on_queue_current)
         self.queue.connect("changed", self._on_queue_changed)
@@ -126,6 +177,14 @@ class Engine(GObject.Object):
         self.player.connect("error", self._on_player_error)
         self.player.connect("video-error", lambda _p, _m:
                             self._set_video_state("unavailable"))
+
+    def _autosave(self) -> bool:
+        if self.state == "playing":
+            try:
+                self.save_state()
+            except Exception as exc:
+                log.debug("Sauvegarde périodique : %s", exc)
+        return GLib.SOURCE_CONTINUE
 
     def _on_queue_changed(self, _queue) -> None:
         # L'anticipation ne vaut plus si la suite a changé.
@@ -316,13 +375,20 @@ class Engine(GObject.Object):
         callback(refs, error)
         return GLib.SOURCE_REMOVE
 
+    def _cache_tracks(self, refs) -> None:
+        """Mémorise les pistes en file dans la bibliothèque, sauf en session
+        privée : la recherche locale révélerait ce qui a été lu."""
+        if not self.settings.get("private_session"):
+            self.library.upsert_many(refs)
+
     def play_refs(self, refs, start: int = 0) -> None:
         """Remplace la file et lance la lecture."""
-        self.library.upsert_many(refs)
+        self._cache_tracks(refs)
+        self._failures = 0
         self.queue.set_items(refs, start=start)
 
     def enqueue(self, refs, next_up: bool = False) -> None:
-        self.library.upsert_many(refs)
+        self._cache_tracks(refs)
         if next_up:
             self.queue.insert_next(refs)
         else:
@@ -344,19 +410,24 @@ class Engine(GObject.Object):
         self._current_ref = None
 
     def next(self) -> None:
+        self._failures = 0
+        self._note_skip()
         self._flush_history(completed=False)
         if self.queue.next(manual=True) is None:
             self._try_autoplay()
 
     def previous(self) -> None:
         # Un « précédent » en cours de piste rembobine, comme partout ailleurs.
-        if self._max_position > RESTART_THRESHOLD and self.player.state != "idle":
+        if (self._current_position() > RESTART_THRESHOLD
+                and self.player.state != "idle"):
             self.player.seek(0.0)
             return
+        self._failures = 0
         self._flush_history(completed=False)
         self.queue.previous()
 
     def jump_to(self, index: int) -> None:
+        self._failures = 0
         self._flush_history(completed=False)
         self.queue.jump_to(index)
 
@@ -366,6 +437,7 @@ class Engine(GObject.Object):
     def set_volume(self, value: float) -> None:
         self.player.set_volume(value)
         self.settings.set("volume", value)
+        self.emit("options-changed")
 
     @property
     def shuffle(self) -> bool:
@@ -375,6 +447,7 @@ class Engine(GObject.Object):
     def shuffle(self, value: bool) -> None:
         self.queue.shuffle = value
         self.settings.set("shuffle", value)
+        self.emit("options-changed")
 
     @property
     def repeat(self) -> str:
@@ -384,6 +457,7 @@ class Engine(GObject.Object):
     def repeat(self, mode: str) -> None:
         self.queue.repeat = mode
         self.settings.set("repeat", mode)
+        self.emit("options-changed")
 
     @property
     def current(self) -> TrackRef | None:
@@ -429,22 +503,31 @@ class Engine(GObject.Object):
         self._pending_asked.clear()
         self._max_position = 0.0
         self._recorded = False
+        self._playing_id = None
+        self._restore_position = 0.0
+        self._autoplay_failed_for = None
+        # Lu ici, sur le fil principal : le fil de résolution ne touche
+        # jamais à `_prefetched`.
+        anticipated = self._take_prefetched(ref)
 
         # L'UI affiche la piste immédiatement, avant même la résolution réseau.
         self.emit("track-changed", ref)
         self._set_busy(True)
-        threading.Thread(target=self._resolve_worker, args=(ref, token),
-                         daemon=True).start()
+        threading.Thread(target=self._resolve_worker,
+                         args=(ref, token, anticipated), daemon=True).start()
         threading.Thread(target=self._segments_worker, args=(ref, token),
                          daemon=True).start()
 
     def _take_prefetched(self, ref: TrackRef) -> Track | None:
-        """Récupère la résolution anticipée de cette piste, si elle existe."""
-        if self._prefetched is not None and self._prefetched[0] == ref.video_id:
-            track = self._prefetched[1]
-            self._prefetched = None
-            return track
-        return None
+        """Récupère la résolution anticipée de cette piste, si elle existe
+        et si son URL n'a pas expiré."""
+        if self._prefetched is None or self._prefetched[0] != ref.video_id:
+            return None
+        _vid, track, at = self._prefetched
+        self._prefetched = None
+        if time.monotonic() - at > PREFETCH_MAX_AGE or _expires_soon(track.stream_url):
+            return None
+        return track
 
     def _prefetch_next(self) -> None:
         """Résout la piste suivante pendant que la courante joue."""
@@ -473,12 +556,12 @@ class Engine(GObject.Object):
     def _prefetch_done(self, video_id: str, track) -> bool:
         self._prefetching = False
         if track is not None:
-            self._prefetched = (video_id, track)
+            self._prefetched = (video_id, track, time.monotonic())
         return GLib.SOURCE_REMOVE
 
-    def _resolve_worker(self, ref: TrackRef, token: int) -> None:
+    def _resolve_worker(self, ref: TrackRef, token: int,
+                        anticipated: Track | None = None) -> None:
         # Piste déjà résolue par anticipation : on enchaîne sans attendre.
-        anticipated = self._take_prefetched(ref)
         if anticipated is not None:
             GLib.idle_add(self._resolve_done, anticipated, token)
             return
@@ -499,7 +582,7 @@ class Engine(GObject.Object):
             return
         GLib.idle_add(self._resolve_done, track, token)
 
-    def _resolve_done(self, track: Track, token: int) -> bool:
+    def _resolve_done(self, track: Track, token: int, start: float = 0.0) -> bool:
         # Une piste plus récente a été demandée pendant la résolution.
         if token != self._load_token:
             return GLib.SOURCE_REMOVE
@@ -511,18 +594,21 @@ class Engine(GObject.Object):
             if not enriched.thumbnail:
                 enriched.thumbnail = previous.thumbnail
             self._current_ref = enriched
-            self.library.upsert_track(enriched)
+            if not self.settings.get("private_session"):
+                self.library.upsert_track(enriched)
             # La piste a déjà été annoncée avant la résolution : on ne
             # réémet que si yt-dlp a réellement corrigé quelque chose.
             if enriched != previous:
                 self.emit("track-changed", enriched)
-        self.player.play_track(track)
+        self._playing_id = track.video_id
+        self.player.play_track(track, start=start)
         if self._video_wanted:
             self._load_video(track.to_ref(), token)
-        try:
-            self.scrobbler.now_playing(enriched if self._current_ref else None)
-        except Exception as exc:
-            log.debug("Signalement d'écoute impossible : %s", exc)
+        if not self.settings.get("private_session"):
+            try:
+                self.scrobbler.now_playing(enriched if self._current_ref else None)
+            except Exception as exc:
+                log.debug("Signalement d'écoute impossible : %s", exc)
         # La suivante se prépare pendant que celle-ci joue.
         GLib.timeout_add_seconds(3, lambda: (self._prefetch_next(), False)[1])
         return GLib.SOURCE_REMOVE
@@ -534,9 +620,28 @@ class Engine(GObject.Object):
         first_line = message.strip().splitlines()[0] if message.strip() else message
         self.emit("error", f"« {ref.title} » illisible : {first_line}")
         # Une piste morte ne doit pas bloquer la file.
-        if self.queue.has_next:
-            GLib.timeout_add(600, lambda: (self.queue.next(), False)[1])
+        self._advance_after_failure(token)
         return GLib.SOURCE_REMOVE
+
+    def _advance_after_failure(self, token: int) -> bool:
+        """Passe à la suite après un échec, sans jamais boucler à l'infini.
+
+        Renvoie False quand on renonce : trop d'échecs d'affilée (aucune
+        piste n'a joué entre-temps) ou plus de suivante. L'avance est
+        manuelle pour que « répéter une piste » ne rejoue pas la morte.
+        """
+        self._failures += 1
+        limit = max(3, len(self.queue.items))
+        if self._failures >= limit:
+            self.emit("error", "Lecture interrompue : plusieurs pistes de "
+                               "suite sont illisibles")
+            return False
+        if not self.queue.has_next:
+            return False
+        GLib.timeout_add(600, lambda: (
+            token == self._load_token and self.queue.next(manual=True),
+            False)[1])
+        return True
 
     def _segments_worker(self, ref: TrackRef, token: int) -> None:
         if not self.settings.get("sponsorblock_enabled"):
@@ -563,7 +668,20 @@ class Engine(GObject.Object):
         self.state = state
         self.emit("state-changed", state)
 
+    def _event_is_current(self) -> bool:
+        ref = self._current_ref
+        return ref is not None and self._playing_id == ref.video_id
+
+    def _current_position(self) -> float:
+        """Position de la piste courante, 0 tant que sa résolution est en
+        cours (le lecteur joue alors encore l'ancienne)."""
+        return self.player.position_hint if self._event_is_current() else 0.0
+
     def _on_player_position(self, _player: Player, position: float) -> None:
+        if not self._event_is_current():
+            return                  # reliquat de la piste précédente
+        if position > FAILURE_RESET_POSITION:
+            self._failures = 0      # la lecture est réellement établie
         self._max_position = max(self._max_position, position)
         self.emit("position-changed", position)
 
@@ -602,14 +720,41 @@ class Engine(GObject.Object):
         self.emit("segment-skipped", segment, gained)
 
     def _on_player_eof(self, _player: Player) -> None:
+        if not self._event_is_current():
+            return
+        self._failures = 0
         self._flush_history(completed=True)
         if self.queue.next() is None:
             self._try_autoplay()
 
     def _on_player_error(self, _player: Player, message: str) -> None:
+        if not self._event_is_current():
+            return
+        ref = self._current_ref
+        track = self.player.track
+        # Un flux expiré ou refusé se résout une seconde fois, à la position
+        # atteinte, avant de renoncer à la piste.
+        if (ref is not None and track is not None and not track.is_local
+                and self._retried_token != self._load_token):
+            self._retried_token = self._load_token
+            self._reresolve(ref, self._load_token, self.player.position_hint)
+            return
         self.emit("error", message)
-        if self.queue.has_next:
-            self.queue.next()
+        self._advance_after_failure(self._load_token)
+
+    def _reresolve(self, ref: TrackRef, token: int, start: float) -> None:
+        self._playing_id = None
+        self._set_busy(True)
+
+        def worker() -> None:
+            try:
+                track = self.extractor.resolve(ref.url)
+            except Exception as exc:
+                GLib.idle_add(self._resolve_failed, ref, token, str(exc))
+                return
+            GLib.idle_add(self._resolve_done, track, token, start)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ---- Radio automatique ----------------------------------------------
 
@@ -619,14 +764,21 @@ class Engine(GObject.Object):
         ref = self._current_ref
         if ref is None:
             return
+        if (ref.video_id == self._autoplay_failed_for
+                and self._clock() < self._autoplay_retry_at):
+            return
         self._refilling = True
         threading.Thread(target=self._autoplay_worker, args=(ref,),
                          daemon=True).start()
 
     def _autoplay_worker(self, ref: TrackRef) -> None:
         try:
-            exclude = [t.video_id for t in self.queue.items]
-            refs = self.recommender.radio_for(ref, limit=20, exclude=exclude)
+            items = self.queue.items
+            refs = self.recommender.radio_for(
+                ref, limit=20, exclude=[t.video_id for t in items],
+                context=items[-RADIO_CONTEXT:],
+                private=bool(self.settings.get("private_session")))
+            self.radio_reason = getattr(self.recommender, "last_reason", "")
         except Exception as exc:
             log.warning("Radio automatique impossible: %s", exc)
             refs = []
@@ -635,14 +787,52 @@ class Engine(GObject.Object):
     def _autoplay_ready(self, refs) -> bool:
         self._refilling = False
         if not refs:
+            if self._current_ref is not None:
+                self._autoplay_failed_for = self._current_ref.video_id
+                self._autoplay_retry_at = self._clock() + AUTOPLAY_RETRY
             return GLib.SOURCE_REMOVE
         was_idle = self.player.state == "idle"
+        self._radio_ids.update(r.video_id for r in refs)
         self.enqueue(refs)
         if was_idle:
             self.queue.next()
         return GLib.SOURCE_REMOVE
 
+    def drop_blocked_upcoming(self) -> int:
+        """Retire de la suite les pistes proposées par la radio qui viennent
+        d'être écartées. Ce que l'utilisateur a mis en file lui-même reste.
+        Renvoie le nombre de pistes retirées."""
+        blocked = self.library.blocked()
+        queue = self.queue
+        start = queue._pos + 1
+        doomed = [i for i in queue._order[start:]
+                  if queue._items[i].video_id in self._radio_ids
+                  and is_blocked(queue._items[i], blocked)]
+        for index in sorted(doomed, reverse=True):
+            queue.remove_at(index)
+        return len(doomed)
+
     # ---- Historique ------------------------------------------------------
+
+    def _note_skip(self) -> None:
+        """Un « suivant » manuel avant 30 % de la piste est un saut : seul
+        signal négatif. Jamais en session privée ; stop, précédent, saut
+        direct, erreur et fin de piste n'en sont pas."""
+        ref = self._current_ref
+        if ref is None or self.settings.get("private_session"):
+            return
+        if self._playing_id != ref.video_id:     # jamais réellement lancée
+            return
+        played = self._max_position
+        duration = self.player.duration or ref.duration
+        early = (played / duration < SKIP_RATIO) if duration > 0 else played < 30.0
+        if not early:
+            return
+        context = "radio" if ref.video_id in self._radio_ids else ""
+        try:
+            self.library.record_skip(ref, played, context)
+        except Exception as exc:
+            log.debug("Saut non enregistré : %s", exc)
 
     def _flush_history(self, completed: bool) -> None:
         """Enregistre l'écoute en cours si elle a duré assez longtemps."""
@@ -673,11 +863,53 @@ class Engine(GObject.Object):
         self.settings.update(
             last_queue=snapshot["items"],
             last_index=snapshot["index"],
-            last_position=self._max_position,
+            last_position=self._current_position() or self._restore_position,
             repeat=snapshot["repeat"],
             shuffle=snapshot["shuffle"],
         )
         self.settings.save()
+
+    def wipe_user_data(self) -> None:
+        """« Tout effacer » : bibliothèque, cookies, paroles, pochettes,
+        file d'attente et tout ce qui trahit une écoute. Les téléphones
+        appairés sont dissociés : leur prochaine synchro ne ressuscite rien."""
+        self.player.stop()
+        self._current_ref = None
+        self._playing_id = None
+        self._planner = None
+        self._load_token += 1               # une résolution en vol est jetée
+        self._restore_position = 0.0
+        self._failures = 0
+        self._radio_ids.clear()
+        self._autoplay_failed_for = None
+        self.queue.set_items([])
+        self.emit("track-changed", None)
+        # D'abord couper la synchro et oublier les téléphones : une synchro
+        # déjà en cours ne doit pas réécrire ce qu'on efface juste après.
+        try:
+            self.sync.cancel_pairing()
+            self.sync.forget_all_devices()
+            self.set_sync_enabled(False)
+        except Exception as exc:
+            log.debug("Dissociation des téléphones : %s", exc)
+        # Le verrou attend la fin d'une fusion en vol ; `_sync` revérifie
+        # ensuite que l'appareil est encore connu.
+        with self.sync._sync_lock:
+            self.library.wipe()
+        self.cookies.clear()
+        try:
+            from . import artwork
+            artwork.clear_cache()
+        except Exception as exc:
+            log.debug("Cache des pochettes : %s", exc)
+        self.settings.update(last_queue=[], last_index=0, last_position=0.0,
+                             search_history=[])
+        for key in ("visitor_data", "visitor_data_at"):
+            self.settings._data.pop(key, None)
+        if self.innertube is not None:
+            self.innertube._visitor = None
+        self.settings.save()
+        self.emit("library-changed")
 
     def backfill_durations_async(self, workers: int = 3) -> None:
         """Complète en arrière-plan les durées manquantes (imports oEmbed).
@@ -749,6 +981,7 @@ class Engine(GObject.Object):
         index = max(0, min(int(index), len(self.queue._items) - 1))
         self.queue._build_order_from(index)
         self._current_ref = self.queue.current
+        self._restore_position = float(self.settings.get("last_position") or 0.0)
         self.emit("queue-changed")
         self.emit("track-changed", self._current_ref)
         return True
@@ -758,10 +991,17 @@ class Engine(GObject.Object):
         ref = self.queue.current
         if ref is None:
             return
-        position = float(self.settings.get("last_position") or 0.0)
+        position = self._restore_position
+        self._restore_position = 0.0
         self._on_queue_current(self.queue, ref)
         if position > RESTART_THRESHOLD:
+            token = self._load_token
+            attempts = [0]
+
             def seek_when_ready() -> bool:
+                attempts[0] += 1
+                if token != self._load_token or attempts[0] > 50:
+                    return False          # autre piste, ou abandon après 15 s
                 if self.player.state in ("playing", "paused"):
                     self.player.seek(position)
                     return False

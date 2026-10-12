@@ -16,6 +16,7 @@ from pathlib import Path
 
 import yt_dlp
 
+from .extractor import JS_RUNTIMES
 from .models import TrackRef
 from .paths import downloads_dir
 
@@ -37,9 +38,12 @@ PENDING, RUNNING, DONE, FAILED, CANCELLED = (
 
 def safe_name(value: str, fallback: str = "Inconnu") -> str:
     """Nom de fichier sûr : ni séparateur, ni caractère de contrôle."""
-    cleaned = _UNSAFE.sub("", (value or "").strip())
-    cleaned = cleaned.strip(". ")          # pas de nom caché ni de point final
-    return cleaned[:80] or fallback
+    cleaned = _UNSAFE.sub("", (value or "").strip()).strip(". ")
+    # Pas de nom caché ni de point final ; le repli est nettoyé de même
+    # (un identifiant venu du réseau ne doit jamais porter un `../`).
+    if not cleaned and fallback:
+        cleaned = _UNSAFE.sub("", fallback).strip(". ") or "Inconnu"
+    return cleaned[:80]
 
 
 @dataclass
@@ -67,10 +71,12 @@ class DownloadManager:
 
     def __init__(self, engine=None, settings=None, library=None,
                  sponsorblock=None) -> None:
+        self._engine = engine
         self._settings = settings
         self._library = library
         self._sponsorblock = sponsorblock
         self._queue: list[Task] = []
+        self._cookie_manager = None
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
         self._cancel = threading.Event()
@@ -139,15 +145,50 @@ class DownloadManager:
         album = safe_name(ref.album or "", "")
         return root / artist / album if album else root / artist
 
+    @staticmethod
+    def _stems(ref: TrackRef) -> list[str]:
+        """Noms de fichier possibles pour cette piste."""
+        return [safe_name(ref.title, ref.video_id)]
+
     def local_path(self, ref: TrackRef) -> Path | None:
-        """Fichier déjà téléchargé pour cette piste, s'il existe."""
+        """Fichier déjà téléchargé pour cette piste, s'il existe.
+
+        L'index par `video_id` fait foi : le titre et l'album d'une piste
+        sont corrigés après sa première lecture, pas son identifiant."""
+        library = self._library
+        if library is not None:
+            recorded = library.download_path(ref.video_id)
+            if recorded:
+                path = Path(recorded)
+                try:
+                    if path.is_file() and path.stat().st_size > 0:
+                        return path
+                except OSError:
+                    pass
+                library.forget_download(ref.video_id)
+        found = self._probe(ref)
+        if found is not None and library is not None:
+            library.record_download(ref.video_id, str(found))
+        return found
+
+    def _probe(self, ref: TrackRef) -> Path | None:
         folder = self.target_dir(ref)
         if not folder.is_dir():
             return None
-        stem = safe_name(ref.title, ref.video_id)
-        for extension in ("opus", "m4a", "mp3", "webm", "ogg"):
-            candidate = folder / f"{stem}.{extension}"
-            if candidate.exists() and candidate.stat().st_size > 0:
+        for stem in self._stems(ref):
+            for extension in ("opus", "m4a", "mp3", "webm", "ogg"):
+                candidate = folder / f"{stem}.{extension}"
+                try:
+                    if not (candidate.is_file() and candidate.stat().st_size > 0):
+                        continue
+                except OSError:
+                    continue
+                # Même artiste et même titre, autre vidéo : le fichier est
+                # déjà celui d'une autre piste, pas de l'index à corrompre.
+                if self._library is not None:
+                    owner = self._library.download_owner(str(candidate))
+                    if owner is not None and owner != ref.video_id:
+                        continue
                 return candidate
         return None
 
@@ -200,7 +241,7 @@ class DownloadManager:
 
         folder = self.target_dir(task.ref)
         folder.mkdir(parents=True, exist_ok=True)
-        stem = safe_name(task.ref.title, task.ref.video_id)
+        stem = self._stems(task.ref)[0]
 
         postprocessors = [{
             "key": "FFmpegExtractAudio",
@@ -229,6 +270,7 @@ class DownloadManager:
             # Jamais de téléchargeur externe : une CVE 2026 y fuite les
             # cookies vers des hôtes tiers (docs/security/).
             "external_downloader": None,
+            "js_runtimes": {k: dict(v) for k, v in JS_RUNTIMES.items()},
         }
         if settings is not None and settings.get("download_cut_sponsorblock", True):
             options["postprocessors"] = [{
@@ -258,25 +300,22 @@ class DownloadManager:
 
     def _download(self, task: Task) -> Path:
         options = self._options(task)
-        if self._cookies_opts():
-            options.update(self._cookies_opts())
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.extract_info(task.ref.url, download=True)
-        path = self.local_path(task.ref)
+        extractor = getattr(self._engine, "extractor", None)
+        if extractor is not None and hasattr(extractor, "download"):
+            # Même repli entre clients YouTube que la lecture.
+            extractor.download(task.ref.url, options)
+        else:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                if self._cookie_manager is not None:
+                    self._cookie_manager.load_into(ydl)
+                ydl.extract_info(task.ref.url, download=True)
+        path = self._probe(task.ref)
         if path is None:
             raise RuntimeError("Fichier introuvable après téléchargement")
         if self._library is not None:
             self._library.upsert_track(task.ref)
+            self._library.record_download(task.ref.video_id, str(path))
         return path
-
-    def _cookies_opts(self) -> dict:
-        engine_cookies = getattr(self, "_cookie_manager", None)
-        if engine_cookies is None:
-            return {}
-        try:
-            return engine_cookies.ytdlp_opts()
-        except Exception:
-            return {}
 
     def attach_cookies(self, cookie_manager) -> None:
         self._cookie_manager = cookie_manager

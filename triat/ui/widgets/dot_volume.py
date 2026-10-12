@@ -36,7 +36,7 @@ class DotVolume(Gtk.Widget):
         self.add_css_class("triat-volume")
         self.set_size_request(int(step * dots), 16)
         self.set_valign(Gtk.Align.CENTER)
-        self.connect("notify::volume", lambda *_: self.queue_draw())
+        self.connect("notify::volume", self._on_volume_notify)
 
         click = Gtk.GestureClick()
         click.connect("pressed", self._on_pressed)
@@ -56,6 +56,19 @@ class DotVolume(Gtk.Widget):
         self.add_controller(keys)
 
         self.update_property([Gtk.AccessibleProperty.LABEL], ["Volume"])
+        self._update_value()
+
+    def _on_volume_notify(self, *_args) -> None:
+        self.queue_draw()
+        self._update_value()
+
+    def _update_value(self) -> None:
+        """Niveau pour les lecteurs d'écran (0-100, « Volume 60 % »)."""
+        level = min(max(self.props.volume, 0.0), 100.0)
+        self.update_property(
+            [Gtk.AccessibleProperty.VALUE_MIN, Gtk.AccessibleProperty.VALUE_MAX,
+             Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+            [0.0, 100.0, level, f"Volume {round(level)} %"])
 
     # ---- Rendu -----------------------------------------------------------
 

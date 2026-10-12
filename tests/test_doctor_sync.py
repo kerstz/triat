@@ -234,3 +234,16 @@ def test_ligne_synchro_activee(monkeypatch):
     assert niveau == "warn"
     assert "écoute sur le port 5555" in texte
     assert "ufw allow 5555/tcp" in texte
+
+
+def test_js_runtime_check_reports_missing_pieces(monkeypatch):
+    import importlib.util
+    import shutil
+    from triat import cli
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    name, status, detail = cli.js_runtime_check()
+    assert status == "warn" and "deno ou node" in detail and "yt-dlp-ejs" in detail
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/deno" if n == "deno" else None)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    assert cli.js_runtime_check()[1] == "ok"

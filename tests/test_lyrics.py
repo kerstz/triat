@@ -201,3 +201,18 @@ def test_real_lrclib_contract():
     result = service.fetch(TrackRef("g" * 11, "Instant Crush", "Daft Punk", 337.0))
     assert result.available
     assert all(isinstance(s, float) and isinstance(t, str) for s, t in result.lines)
+
+
+def test_network_failure_is_not_cached_as_no_lyrics(tmp_path):
+    from triat.core.library import Library
+    from triat.core.lyrics import LyricsService
+    from triat.core.models import TrackRef
+    lib = Library(tmp_path / "l.db")
+    service = LyricsService(lib)
+    ref = TrackRef("abcdefghijk", "Titre", "Artiste", 200.0)
+    service._call = lambda path, params: __import__("triat.core.lyrics", fromlist=["x"])._UNREACHABLE
+    assert service.fetch(ref).lines == []
+    with lib._lock:
+        count = lib._db.execute("SELECT COUNT(*) FROM lyrics").fetchone()[0]
+    assert count == 0
+    lib.close()

@@ -7,7 +7,11 @@ rempli en boucle ne tiendrait pas.
 
 from __future__ import annotations
 
-from gi.repository import Gdk, Gio, GObject, Gtk
+import gi
+
+gi.require_version("Graphene", "1.0")
+
+from gi.repository import Gdk, Gio, GObject, Graphene, Gtk
 
 from ..core.models import TrackRef, display_title
 from .widgets.cover import Cover
@@ -54,13 +58,18 @@ class TrackList(Gtk.ListView):
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._on_setup)
         factory.connect("bind", self._on_bind)
+        factory.connect("unbind", self._on_unbind)
 
         super().__init__(model=selection, factory=factory)
         self.add_css_class("triat-track-list")
         self.set_vexpand(True)
+        # Un seul clic lance la piste, comme la grille de pochettes.
+        self.set_single_click_activate(True)
         self.connect("activate", self._on_activate)
         self._current_id: str | None = None
         self._menu_index = -1
+        self._bound: set = set()
+        self._favorite_checker = None
         self._build_menu()
 
     # ---- Menu contextuel -------------------------------------------------
@@ -74,6 +83,7 @@ class TrackList(Gtk.ListView):
         menu.append_section(None, lecture)
 
         organiser = Gio.Menu()
+        self._organiser = organiser
         organiser.append("Ajouter aux favoris", "piste.favorite")
         organiser.append("Ajouter à une playlist…", "piste.playlist")
         organiser.append("Télécharger", "piste.download")
@@ -82,6 +92,7 @@ class TrackList(Gtk.ListView):
         divers = Gio.Menu()
         divers.append("Aller à l'artiste", "piste.artist")
         divers.append("Copier le lien", "piste.copy")
+        divers.append("Ne plus recommander…", "piste.block")
         menu.append_section(None, divers)
 
         self._popover = Gtk.PopoverMenu.new_from_model(menu)
@@ -91,39 +102,83 @@ class TrackList(Gtk.ListView):
 
         group = Gio.SimpleActionGroup()
         for name in ("next", "queue", "favorite", "playlist", "copy",
-                     "download", "artist"):
+                     "download", "artist", "block"):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", self._on_menu_action, name)
             group.add_action(action)
         self.insert_action_group("piste", group)
 
-        gesture = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
-        gesture.connect("pressed", self._on_right_click)
-        self.add_controller(gesture)
+        # Clavier : Maj+F10 ou touche Menu, sur la ligne sélectionnée.
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key)
+        self.add_controller(keys)
 
-    def _on_right_click(self, _gesture, _n: int, x: float, y: float) -> None:
-        index = self._index_at(y)
-        if index < 0:
+    def set_favorite_checker(self, checker) -> None:
+        """`checker(ref) -> bool` : libellé du menu selon l'état du favori."""
+        self._favorite_checker = checker
+
+    def _is_favorite(self, ref) -> bool:
+        checker = self._favorite_checker
+        if checker is None:
+            # Repli : la fenêtre porte le moteur.
+            root = self.get_root()
+            engine = getattr(root, "engine", None) if root else None
+            library = getattr(engine, "library", None)
+            if library is None:
+                return False
+            checker = lambda r: library.is_favorite(r.video_id)   # noqa: E731
+        try:
+            return bool(checker(ref))
+        except Exception:
+            return False
+
+    def _refresh_favorite_label(self, index: int) -> None:
+        item = self._store.get_item(index)
+        favorite = item is not None and self._is_favorite(item.ref)
+        self._organiser.remove(0)
+        self._organiser.insert(
+            0, "Retirer des favoris" if favorite else "Ajouter aux favoris",
+            "piste.favorite")
+
+    def _open_menu(self, index: int, anchor: Gtk.Widget | None,
+                   x: float, y: float) -> None:
+        """Ouvre le menu de la ligne `index`, près de (x, y) dans `anchor`."""
+        if not (0 <= index < self._store.get_n_items()):
             return
         self._menu_index = index
+        self._refresh_favorite_label(index)
+        px, py = x, y
+        if anchor is not None and anchor is not self:
+            ok, point = anchor.compute_point(self, Graphene.Point().init(x, y))
+            if ok:
+                px, py = point.x, point.y
         rect = Gdk.Rectangle()
-        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        rect.x, rect.y, rect.width, rect.height = int(px), int(py), 1, 1
         self._popover.set_pointing_to(rect)
-        self._popover.popup()
+        if self.get_root() is not None:      # hors fenêtre : rien à afficher
+            self._popover.popup()
 
-    def _index_at(self, y: float) -> int:
-        """Index de la ligne sous le pointeur.
+    def _on_row_right_click(self, _gesture, _n: int, x: float, y: float,
+                            list_item: Gtk.ListItem) -> None:
+        # La position vient de la ligne elle-même : aucune arithmétique sur
+        # les coordonnées, donc juste quel que soit le défilement.
+        position = list_item.get_position()
+        if position == Gtk.INVALID_LIST_POSITION:
+            return
+        self._open_menu(position, list_item.get_child(), x, y)
 
-        `Gtk.ListView` n'expose pas la position : on part de la hauteur de
-        ligne, uniforme ici.
-        """
-        count = self._store.get_n_items()
-        if count == 0:
-            return -1
-        height = max(self.get_height(), 1)
-        row_height = height / count if count * ROW_HEIGHT <= height else ROW_HEIGHT
-        index = int(y // max(row_height, 1))
-        return index if 0 <= index < count else -1
+    def _on_key(self, _ctrl, keyval, _code, state) -> bool:
+        shift_f10 = (keyval == Gdk.KEY_F10
+                     and state & Gdk.ModifierType.SHIFT_MASK)
+        if not (shift_f10 or keyval == Gdk.KEY_Menu):
+            return False
+        index = self.get_model().get_selected()
+        if index == Gtk.INVALID_LIST_POSITION:
+            return False
+        anchor = next((li.get_child() for li in self._bound
+                       if li.get_position() == index), None)
+        self._open_menu(index, anchor, 24, ROW_HEIGHT / 2)
+        return True
 
     def _on_menu_action(self, _action, _param, name: str) -> None:
         if 0 <= self._menu_index < self._store.get_n_items():
@@ -185,6 +240,10 @@ class TrackList(Gtk.ListView):
         duration.add_css_class("triat-dim")
         row.append(duration)
 
+        gesture = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        gesture.connect("pressed", self._on_row_right_click, list_item)
+        row.add_controller(gesture)
+
         list_item.set_child(row)
         list_item._widgets = (number, cover, title, artist, duration)
 
@@ -194,6 +253,12 @@ class TrackList(Gtk.ListView):
         playing = item.ref.video_id == self._current_id
         # La piste en cours remplace son numéro par un point accent (screens.md §4).
         number.set_text("●" if playing else f"{item.index + 1:02d}")
+        if playing:
+            # Le point seul serait lu « disque noir ».
+            number.update_property([Gtk.AccessibleProperty.LABEL], ["En cours"])
+        else:
+            number.reset_property(Gtk.AccessibleProperty.LABEL)
+        self._bound.add(list_item)
         row = number.get_parent()
         if playing:
             number.add_css_class("triat-accent-text")
@@ -206,6 +271,9 @@ class TrackList(Gtk.ListView):
         cover.set_track(item.ref)
         artist.set_text(item.ref.artist or "—")
         duration.set_text(format_time(item.ref.duration) if item.ref.duration else "—")
+
+    def _on_unbind(self, _factory, list_item: Gtk.ListItem) -> None:
+        self._bound.discard(list_item)
 
     def _on_activate(self, _view, position: int) -> None:
         self.emit("track-activated", position)

@@ -9,7 +9,6 @@ import stat
 import pytest
 
 from triat.core.net import (
-    MEDIA_HOST_SUFFIXES,
     UnsafeURL,
     check_url,
     is_safe_url,
@@ -168,7 +167,8 @@ def test_plain_words_are_still_treated_as_a_search():
         def extract_info(self, query, download=False):
             captured["query"] = query
             return {"_type": "playlist", "entries": [{
-                "id": "x" * 11, "title": "T", "url": "https://exemple.test/s",
+                "id": "x" * 11, "title": "T",
+                "url": "https://rr1---sn-a.googlevideo.com/videoplayback?x=1",
                 "duration": 1, "webpage_url": "https://exemple.test"}]}
 
     import yt_dlp
@@ -481,3 +481,17 @@ def test_log_file_is_private(tmp_path, monkeypatch):
         for handler in root.handlers[len(before):]:
             root.removeHandler(handler)
             handler.close()
+
+
+def test_stream_url_outside_google_media_hosts_is_refused():
+    from triat.core.extractor import ExtractionError, Extractor
+    with pytest.raises(ExtractionError):
+        Extractor._to_track({"id": "a" * 11, "url": "https://evil.example/a.webm"})
+    assert Extractor._to_track(
+        {"id": "a" * 11, "url": "https://r1.googlevideo.com/videoplayback"}).video_id
+
+
+def test_cookie_domain_match_is_not_a_suffix_match():
+    from triat.core.auth import _is_youtube_domain
+    assert _is_youtube_domain(".youtube.com") and _is_youtube_domain("music.youtube.com")
+    assert not _is_youtube_domain("notyoutube.com")

@@ -15,6 +15,7 @@ from gi.repository import Gtk
 
 from .track_list import TrackList
 from .widgets.cards import seed_for
+from .widgets.common import plural
 from .widgets.glyph import GlyphArt
 
 
@@ -92,7 +93,7 @@ class ArtistPage(Gtk.Box):
         local = self._engine.library.tracks_by_artist(self._artist)
         self.tracks.set_tracks(local)
         self.status.set_text(
-            f"{len(local)} piste{'s' if len(local) > 1 else ''} en bibliothèque"
+            f"{plural(len(local), 'piste')} en bibliothèque"
             if local else "Aucune piste en bibliothèque")
         self.play_all.set_sensitive(bool(local))
         self.radio.set_sensitive(bool(local))
@@ -112,7 +113,7 @@ class ArtistPage(Gtk.Box):
         merged = self.tracks.tracks + extra[:20]
         self.tracks.set_tracks(merged)
         self.status.set_text(
-            f"{len(merged)} pistes, complété en ligne")
+            f"{plural(len(merged), 'piste')}, complété en ligne")
         self.play_all.set_sensitive(True)
         self.radio.set_sensitive(True)
         self._mark_current()

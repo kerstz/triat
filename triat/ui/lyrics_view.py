@@ -70,6 +70,13 @@ class LyricsView(Gtk.Box):
         self._message.add_css_class("triat-dim")
         self._lines_box.append(self._message)
 
+        self._retry = Gtk.Button(label="Réessayer", halign=Gtk.Align.START)
+        self._retry.add_css_class("pill")
+        self._retry.set_visible(False)
+        self._retry.connect("clicked", self._on_retry)
+        self._lines_box.append(self._retry)
+        self._ref = None
+
         if engine is not None:
             engine.connect("track-changed", self._on_track)
             engine.connect("position-changed", self._on_position)
@@ -81,6 +88,7 @@ class LyricsView(Gtk.Box):
         token = self._token
         self._lyrics = None
         self._current = -1
+        self._ref = ref
         self._clear()
         if ref is None:
             self._show_message("")
@@ -94,12 +102,15 @@ class LyricsView(Gtk.Box):
             lyrics = self._engine.lyrics.fetch(ref)
         except Exception as exc:
             log.debug("Paroles indisponibles : %s", exc)
+            GLib.idle_add(self._show_error, token)
             return
         GLib.idle_add(self._apply, lyrics, token)
 
     def _apply(self, lyrics, token: int) -> bool:
         if token != self._token:
             return GLib.SOURCE_REMOVE
+        if getattr(lyrics, "unreachable", False):
+            return self._show_error(token)
         self._lyrics = lyrics
         self._clear()
 
@@ -119,6 +130,19 @@ class LyricsView(Gtk.Box):
                 "Paroles indisponibles pour cette piste.")
         return GLib.SOURCE_REMOVE
 
+    def _show_error(self, token: int) -> bool:
+        """Hors ligne ou service muet : on le dit, avec une issue."""
+        if token != self._token:
+            return GLib.SOURCE_REMOVE
+        self._clear()
+        self._show_message("Paroles indisponibles hors ligne")
+        self._retry.set_visible(True)
+        return GLib.SOURCE_REMOVE
+
+    def _on_retry(self, _button) -> None:
+        if self._ref is not None:
+            self._on_track(self._engine, self._ref)
+
     def _make_line(self, text: str) -> Gtk.Label:
         label = Gtk.Label(label=text or "♪", xalign=0, wrap=True,
                           max_width_chars=34)
@@ -132,7 +156,9 @@ class LyricsView(Gtk.Box):
         self._rows = []
         self._source.set_text("")
         self._lines_box.append(self._message)
+        self._lines_box.append(self._retry)
         self._message.set_visible(False)
+        self._retry.set_visible(False)
 
     def _show_message(self, text: str) -> None:
         self._message.set_text(text)

@@ -12,6 +12,7 @@ donnerait un profil vierge, et donc un accueil vide.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import re
@@ -312,29 +313,32 @@ class InnerTube:
 
     # ---- Appels ----------------------------------------------------------
 
-    def _call(self, endpoint: str, payload: dict) -> dict | None:
+    def _call(self, endpoint: str, payload: dict,
+              ephemeral: bool = False) -> dict | None:
+        """`ephemeral` : requête sans identité (ni identifiant de visiteur,
+        ni cookies), pour la session privée : ce qui est demandé ne doit pas
+        nourrir le profil qui personnalise l'accueil."""
         if not self._ensure_ready():
             return None
-        body = {
-            "context": {
-                "client": {
-                    "clientName": "WEB",
-                    "clientVersion": self._client_version,
-                    "hl": self._language,
-                    "gl": self._region,
-                    "visitorData": self._visitor,
-                }
-            }
+        client = {
+            "clientName": "WEB",
+            "clientVersion": self._client_version,
+            "hl": self._language,
+            "gl": self._region,
         }
+        if not ephemeral:
+            client["visitorData"] = self._visitor
+        body = {"context": {"client": client}}
         body.update(payload)
         headers = {
             "User-Agent": USER_AGENT,
             "Content-Type": "application/json",
-            "X-Goog-Visitor-Id": self._visitor or "",
             "Origin": WEB_HOST,
             "Referer": WEB_HOST + "/",
         }
-        if self._cookies is not None:
+        if not ephemeral:
+            headers["X-Goog-Visitor-Id"] = self._visitor or ""
+        if self._cookies is not None and not ephemeral:
             try:
                 cookie_header = self._cookies.cookie_header()
             except Exception:
@@ -354,15 +358,19 @@ class InnerTube:
                 # Session probablement périmée : on réamorcera au prochain appel.
                 with self._lock:
                     self._api_key = self._client_version = None
-        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
+        except (OSError, http.client.HTTPException, ValueError) as exc:
+            # URLError, délai, coupure en cours de lecture, JSON ou réponse
+            # trop grosse : jamais d'exception vers l'interface.
             log.info("InnerTube %s indisponible: %s", endpoint, exc)
         return None
 
     # ---- Recommandations -------------------------------------------------
 
-    def related(self, video_id: str, limit: int = 25) -> list[TrackRef]:
-        """Pistes suggérées à la suite d'une vidéo. Marche sans compte."""
-        data = self._call("next", {"videoId": video_id})
+    def related(self, video_id: str, limit: int = 25,
+                ephemeral: bool = False) -> list[TrackRef]:
+        """Pistes suggérées à la suite d'une vidéo. Marche sans compte.
+        `ephemeral` : sans identité (session privée), voir `_call`."""
+        data = self._call("next", {"videoId": video_id}, ephemeral=ephemeral)
         if data is None:
             return []
         refs = [r for r in extract_refs(data) if r.video_id != video_id]

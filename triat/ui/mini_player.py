@@ -43,7 +43,7 @@ class MiniPlayer(Adw.ApplicationWindow):
         self.set_decorated(False)
         self.add_css_class("triat-mini")
 
-        cover = Cover(size=COVER, radius=14.0)
+        cover = Cover(size=COVER, radius=6.0)
         self.cover = cover
 
         self._title = _label("Rien en lecture", "triat-display", "xs")
@@ -131,12 +131,36 @@ class MiniPlayer(Adw.ApplicationWindow):
         self.progress.connect("seek-requested",
                               lambda _w, value: engine.seek(value))
 
-        engine.connect("track-changed", self._on_track)
-        engine.connect("state-changed", self._on_state)
-        engine.connect("position-changed", self._on_position)
-        engine.connect("duration-changed", self._on_duration)
+        # Les identifiants sont gardés : le mini-lecteur est recréé à chaque
+        # ouverture, ses rappels ne doivent pas survivre à la fenêtre.
+        self._handlers = [
+            engine.connect("track-changed", self._on_track),
+            engine.connect("state-changed", self._on_state),
+            engine.connect("position-changed", self._on_position),
+            engine.connect("duration-changed", self._on_duration),
+        ]
+        self.connect("close-request", self._on_close_request)
+        self.connect("destroy", lambda *_: self._disconnect())
         if engine.current is not None:
             self._on_track(engine, engine.current)
+        # État courant : sans cela le bouton montre « lecture » jusqu'au
+        # prochain changement, même quand la musique joue.
+        self._on_state(engine, engine.state)
+        player = getattr(engine, "player", None)
+        duration = float(getattr(player, "duration", 0.0) or 0.0)
+        if duration > 0:
+            self._on_duration(engine, duration)
+        self._on_position(engine, float(getattr(player, "position_hint", 0.0) or 0.0))
+
+    def _disconnect(self) -> None:
+        for handler in getattr(self, "_handlers", []):
+            if self._engine.handler_is_connected(handler):
+                self._engine.disconnect(handler)
+        self._handlers = []
+
+    def _on_close_request(self, _window) -> bool:
+        self._disconnect()
+        return False
 
     def _install_shortcuts(self) -> None:
         controller = Gtk.ShortcutController()
@@ -174,6 +198,9 @@ class MiniPlayer(Adw.ApplicationWindow):
         playing = state == "playing"
         self.play_button.set_icon_name(
             "triat-pause-symbolic" if playing else "triat-play-symbolic")
+        name = "Pause" if playing else "Lecture"
+        self.play_button.set_tooltip_text(name)
+        self.play_button.update_property([Gtk.AccessibleProperty.LABEL], [name])
         self.play_button.set_sensitive(state != "idle")
 
     def _on_position(self, _engine, value: float) -> None:

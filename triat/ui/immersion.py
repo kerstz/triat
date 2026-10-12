@@ -22,6 +22,7 @@ from .widgets.cover import Cover
 from .widgets.dot_progress import DotProgressBar
 from .widgets.dot_volume import DotVolume
 from .widgets.glyph import GlyphArt
+from .track_list import format_time as _format_time
 from .widgets.video_area import VideoArea
 
 log = logging.getLogger(__name__)
@@ -41,9 +42,10 @@ VIDEO_MESSAGES = {
 }
 
 
-def _format_time(seconds: float) -> str:
-    seconds = max(0, int(seconds or 0))
-    return f"{seconds // 60}:{seconds % 60:02d}"
+def _animations_enabled() -> bool:
+    """Respecte « réduire les animations » : pas de spectre à 30 i/s."""
+    settings = Gtk.Settings.get_default()
+    return settings is None or bool(settings.get_property("gtk-enable-animations"))
 
 
 def _label(text: str, *css: str, **kwargs) -> Gtk.Label:
@@ -71,6 +73,7 @@ class ImmersionView(Gtk.Overlay):
         self._handlers: list[int] = []
         self._mode = engine.settings.get("immersion_mode") or "clip"
         self._syncing_chips = False
+        self._keyboard_nav = False
         self._spectrum = Spectrum()
 
         self._build()
@@ -116,7 +119,7 @@ class ImmersionView(Gtk.Overlay):
         self.placeholder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                                    spacing=16, halign=Gtk.Align.CENTER,
                                    valign=Gtk.Align.CENTER)
-        self.cover = Cover(size=160, radius=12.0)
+        self.cover = Cover(size=160, radius=6.0)
         self.placeholder.append(self.cover)
         self.message = _label("", "triat-mono")
         self.placeholder.append(self.message)
@@ -265,7 +268,7 @@ class ImmersionView(Gtk.Overlay):
 
         click = Gtk.GestureClick()
         click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        click.connect("pressed", lambda *_: self._reveal())
+        click.connect("pressed", self._on_pressed)
         self.add_controller(click)
 
         keys = Gtk.EventControllerKey()
@@ -298,7 +301,8 @@ class ImmersionView(Gtk.Overlay):
                 ("position-changed", self._on_position),
                 ("duration-changed", self._on_duration),
                 ("queue-changed", lambda *_: self._refresh_up_next()),
-                ("video-changed", self._on_video)):
+                ("video-changed", self._on_video),
+                ("options-changed", self._on_options)):
             self._handlers.append(engine.connect(signal, handler))
         self.volume.props.volume = float(engine.settings.get("volume"))
         self._on_track(engine, engine.current)
@@ -365,6 +369,13 @@ class ImmersionView(Gtk.Overlay):
         self.play_button.set_icon_name(
             "triat-pause-symbolic" if playing else "triat-play-symbolic")
         self.play_button.set_tooltip_text("Pause" if playing else "Lecture")
+
+    def _on_options(self, _engine) -> None:
+        """Volume changé ailleurs (barre, lecture en cours, MPRIS)."""
+        try:
+            self.volume.props.volume = float(self._engine.settings.get("volume"))
+        except (TypeError, ValueError):
+            pass
 
     def _on_position(self, _engine, value: float) -> None:
         self.progress.props.position = value
@@ -466,7 +477,23 @@ class ImmersionView(Gtk.Overlay):
             if dx < 2 and dy < 2:
                 return
         self._last_pointer = (x, y)
+        self._keyboard_nav = False
         self._reveal()
+
+    def _on_pressed(self, *_args) -> None:
+        self._keyboard_nav = False
+        self._reveal()
+
+    def _focus_in_controls(self) -> bool:
+        """Le focus clavier est sur un contrôle : le masquer le rendrait
+        invisible sous les doigts de qui navigue à la touche Tab."""
+        root = self.get_root()
+        widget = root.get_focus() if root is not None else None
+        while widget is not None:
+            if widget is self.top or widget is self.bottom:
+                return True
+            widget = widget.get_parent()
+        return False
 
     def _reveal(self) -> None:
         for widget in (self.top, self.bottom):
@@ -481,6 +508,11 @@ class ImmersionView(Gtk.Overlay):
     def _conceal(self) -> bool:
         self._hide_source = 0
         if not self._active:
+            return GLib.SOURCE_REMOVE
+        if self._keyboard_nav and self._focus_in_controls():
+            # On repasse plus tard : les contrôles se masqueront dès que
+            # le focus les quitte ou que la souris reprend la main.
+            self._hide_source = GLib.timeout_add(HIDE_AFTER_MS, self._conceal)
             return GLib.SOURCE_REMOVE
         for widget in (self.top, self.bottom):
             widget.add_css_class("triat-concealed")
@@ -510,6 +542,9 @@ class ImmersionView(Gtk.Overlay):
     def _on_key(self, _controller, keyval: int, _code: int, state) -> bool:
         if state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
             return False
+        # Toute touche rappelle les contrôles : au clavier, on veut les voir.
+        self._keyboard_nav = True
+        self._reveal()
         if keyval == Gdk.KEY_Escape:
             self._on_close()
             return True
@@ -518,11 +553,9 @@ class ImmersionView(Gtk.Overlay):
             return True
         if keyval in (Gdk.KEY_v, Gdk.KEY_V):
             self.set_mode("glyph" if self._mode == "clip" else "clip")
-            self._reveal()
             return True
         if keyval in (Gdk.KEY_l, Gdk.KEY_L):
             self.lyrics_chip.set_active(not self.lyrics_chip.get_active())
-            self._reveal()
             return True
         if keyval == Gdk.KEY_Left:
             self._engine.seek(max(0.0, self._engine.player.position_hint - 5))
@@ -573,11 +606,16 @@ class ImmersionView(Gtk.Overlay):
 
     def _show_scene(self, scene: str) -> None:
         self._scene = scene
+        # Opacité, jamais `visible` : masquer une surface GL la fait râler
+        # (cf. `_set_message`). Le calque est noir plein (CSS), il cache
+        # donc le clip tant que la matrice est affichée.
         if scene == "glyph":
             self.glyph_layer.remove_css_class("triat-hidden-layer")
+            self.glyph_layer.set_opacity(1.0)
         else:
             self.glyph_layer.add_css_class("triat-hidden-layer")
-        if scene == "glyph" and self._active:
+            self.glyph_layer.set_opacity(0.0)
+        if scene == "glyph" and self._active and _animations_enabled():
             if not self._spectrum.running:
                 self._spectrum.start(self.glyph.set_levels)
         else:

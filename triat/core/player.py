@@ -50,6 +50,11 @@ class Player(GObject.Object):
         self._video_attached = False
         self._loaded = False
         self._render = None
+        # Génération du fichier confié à mpv : les événements mis en file
+        # pour le thread principal portent la leur, et ceux d'un fichier
+        # remplacé depuis sont jetés (sinon la position ou la fin de
+        # l'ancienne piste serait créditée à la nouvelle).
+        self._gen = 0
 
         self._mpv = mpv.MPV(
             # Pas de vidéo par défaut. Le clip de l'écran Immersion est greffé
@@ -70,6 +75,9 @@ class Player(GObject.Object):
         )
 
         self._last_sent_position: float | None = None
+        # Faux entre l'ordre de lecture et `file-loaded` : mpv peut encore
+        # livrer quelques positions de l'ancien fichier.
+        self._accept_position = True
         self._mpv.observe_property("time-pos", self._on_time_pos)
         self._mpv.observe_property("duration", self._on_duration)
         self._mpv.observe_property("core-idle", self._on_core_idle)
@@ -77,16 +85,17 @@ class Player(GObject.Object):
 
         @self._mpv.event_callback("file-loaded")
         def _on_file_loaded(_event) -> None:
-            GLib.idle_add(self._on_loaded)
+            GLib.idle_add(self._on_loaded, self._gen)
 
         @self._mpv.event_callback("end-file")
         def _on_end_file(event) -> None:
             reason = getattr(event.data, "reason", None)
             reason = getattr(reason, "value", reason)
+            gen = self._gen
             if reason in ("eof", 0):
-                GLib.idle_add(self._emit_eof)
+                GLib.idle_add(self._emit_eof, gen)
             elif reason in ("error", 4):
-                GLib.idle_add(self._emit_error, "Échec de lecture du flux")
+                GLib.idle_add(self._emit_error, "Échec de lecture du flux", gen)
 
     # ---- API publique -------------------------------------------------
 
@@ -107,10 +116,14 @@ class Player(GObject.Object):
         """Dernière position connue. Approximative entre deux notifications."""
         return self._position
 
-    def play_track(self, track: Track) -> None:
+    def play_track(self, track: Track, start: float = 0.0) -> None:
+        """Lit la piste ; `start` reprend à cette position (flux ré-résolu)."""
+        self._gen += 1
         self._track = track
         self._duration = track.duration
-        self._position = 0.0
+        self._position = max(0.0, start)
+        self._accept_position = False
+        self._last_sent_position = None
         self._set_state("loading")
         self._loaded = False
         self._video_attached = False
@@ -127,7 +140,10 @@ class Player(GObject.Object):
         self._mpv.vid = "no"
 
         try:
-            self._mpv.play(track.stream_url)
+            if start > 1.0:
+                self._mpv.loadfile(track.stream_url, start=f"{start:.2f}")
+            else:
+                self._mpv.play(track.stream_url)
             self._mpv.pause = False
         except Exception as exc:
             log.exception("mpv.play a échoué")
@@ -153,8 +169,11 @@ class Player(GObject.Object):
         except Exception as exc:
             log.debug("Retrait de la vidéo : %s", exc)
 
-    def _on_loaded(self) -> bool:
+    def _on_loaded(self, gen: int | None = None) -> bool:
+        if gen is not None and gen != self._gen:
+            return GLib.SOURCE_REMOVE
         self._loaded = True
+        self._accept_position = True
         self._attach_video()
         return GLib.SOURCE_REMOVE
 
@@ -216,6 +235,7 @@ class Player(GObject.Object):
         self._mpv.pause = not self._mpv.pause
 
     def stop(self) -> None:
+        self._gen += 1                  # les événements en vol sont périmés
         self._mpv.command("stop")
         self._track = None
         self._duration = 0.0
@@ -274,8 +294,8 @@ class Player(GObject.Object):
         self.free_render_context()
         try:
             self._mpv.terminate()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Arrêt de mpv : %s", exc)
 
     # ---- Callbacks mpv (threads mpv) ----------------------------------
 
@@ -286,18 +306,18 @@ class Player(GObject.Object):
     POSITION_STEP = 0.2
 
     def _on_time_pos(self, _name: str, value: float | None) -> None:
-        if value is None or self._seeking:
+        if value is None or self._seeking or not self._accept_position:
             return
         value = float(value)
         last = self._last_sent_position
         if last is not None and 0.0 <= value - last < self.POSITION_STEP:
             return
         self._last_sent_position = value
-        GLib.idle_add(self._emit_position, value)
+        GLib.idle_add(self._emit_position, value, self._gen)
 
     def _on_duration(self, _name: str, value: float | None) -> None:
         if value:
-            GLib.idle_add(self._emit_duration, float(value))
+            GLib.idle_add(self._emit_duration, float(value), self._gen)
 
     def _on_core_idle(self, _name: str, value: bool | None) -> None:
         # core-idle passe à False dès que la lecture démarre vraiment.
@@ -317,22 +337,33 @@ class Player(GObject.Object):
             self.emit("state-changed", state)
         return GLib.SOURCE_REMOVE
 
-    def _emit_position(self, value: float) -> bool:
+    def _stale(self, gen: int | None) -> bool:
+        return gen is not None and gen != self._gen
+
+    def _emit_position(self, value: float, gen: int | None = None) -> bool:
+        if self._stale(gen):
+            return GLib.SOURCE_REMOVE
         self._position = value
         self.emit("position-changed", value)
         return GLib.SOURCE_REMOVE
 
-    def _emit_duration(self, value: float) -> bool:
+    def _emit_duration(self, value: float, gen: int | None = None) -> bool:
+        if self._stale(gen):
+            return GLib.SOURCE_REMOVE
         self._duration = value
         self.emit("duration-changed", value)
         return GLib.SOURCE_REMOVE
 
-    def _emit_eof(self) -> bool:
+    def _emit_eof(self, gen: int | None = None) -> bool:
+        if self._stale(gen):
+            return GLib.SOURCE_REMOVE
         self._set_state("idle")
         self.emit("eof")
         return GLib.SOURCE_REMOVE
 
-    def _emit_error(self, message: str) -> bool:
+    def _emit_error(self, message: str, gen: int | None = None) -> bool:
+        if self._stale(gen):
+            return GLib.SOURCE_REMOVE
         self._set_state("idle")
         self.emit("error", message)
         return GLib.SOURCE_REMOVE

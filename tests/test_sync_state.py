@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from triat.core import sync_state as ss
 from triat.core.library import Library
 from triat.core.models import TrackRef
@@ -96,4 +98,49 @@ def test_merge_is_commutative_and_idempotent(tmp_path):
 def test_invalid_tracks_are_ignored():
     assert ss.track_from_wire({"id": "local:/sdcard/x.mp3"}) is None
     assert ss.track_from_wire({"id": 12}) is None
-    assert ss.track_from_wire({"id": "a" * 11}).title == "Sans titre"
+    assert ss.track_from_wire({"id": "a" * 11}).title == ""
+
+
+def test_tombstone_keeps_author_date(tmp_path):
+    lib = Library(tmp_path / "a.db")
+    pid = lib.create_playlist("Nuit", uid="u1")
+    now = time.time()
+    lib.set_playlist_updated(pid, now - 7200)
+    ss.apply(lib, {"playlists": [{"uid": "u1", "name": "", "updated": int((now - 3600) * 1000),
+                                  "deleted": True, "tracks": []}]})
+    assert lib.tombstones("playlist")["u1"] == pytest.approx(now - 3600, abs=0.01)
+    lib.close()
+
+
+def test_newer_edit_beats_older_delete_across_three_devices(tmp_path):
+    a, b, c = (Library(tmp_path / f"{n}.db") for n in "abc")
+    a.create_playlist("Nuit", uid="u1")
+    sync(a, b); sync(a, c)
+    t = time.time()
+    b.delete_playlist(b.list_playlists()[0]["id"], at=t + 10)       # t1
+    sync(a, b)                                                     # a apprend t1
+    cid = c.list_playlists()[0]["id"]
+    c.rename_playlist(cid, "Nuit 2")
+    c.set_playlist_updated(cid, t + 20)                             # t2 > t1
+    sync(a, c)
+    assert [p["name"] for p in a.list_playlists()] == ["Nuit 2"]
+    for lib in (a, b, c):
+        lib.close()
+
+
+def test_empty_title_does_not_overwrite_known_title(tmp_path):
+    lib = Library(tmp_path / "a.db")
+    lib.upsert_track(ref(1))
+    ss.apply(lib, {"history": [{"id": ref(1).video_id, "at": 1_700_000_000_000,
+                                "seconds": 5, "track": {"id": ref(1).video_id,
+                                                        "title": "", "artist": ""}}]})
+    assert lib.get_track(ref(1).video_id).title == "T1"
+    lib.close()
+
+
+def test_sanitize_rejects_bad_shape_and_drops_bad_items():
+    assert ss.sanitize({"v": 1, "playlists": "oops"}) is None
+    clean = ss.sanitize({"v": 1, "playlists": [1, {"uid": "x", "updated": "zz"}, {"uid": 3}],
+                         "likes": [{"id": "a", "at": "7"}], "history": None or []})
+    assert [p["uid"] for p in clean["playlists"]] == ["x"]
+    assert clean["playlists"][0]["updated"] == 0 and clean["likes"][0]["at"] == 7

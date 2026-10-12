@@ -32,7 +32,8 @@ def test_rules(tmp_path):
         lib._db.execute("UPDATE tracks SET added_at = ? WHERE video_id = ?",
                         (time.time() - 40 * DAY, ref(3).video_id))
     smart = {s.key: s for s in smart_playlists(lib, Downloads([ref(2).video_id]))}
-    ids = lambda key: [r.video_id for r in smart[key].fetch()]
+    def ids(key):
+        return [r.video_id for r in smart[key].fetch()]
     assert ids("repeat") == [ref(1).video_id]
     assert set(ids("unplayed")) == {ref(2).video_id, ref(3).video_id}
     assert set(ids("recent")) == {ref(1).video_id, ref(2).video_id}

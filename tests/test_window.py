@@ -8,7 +8,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
 import pytest
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, Gio, Gtk
 
 from triat.core.engine import Engine
 from triat.core.library import Library
@@ -43,7 +43,10 @@ def application():
     Un identifiant ne peut être enregistré qu'une fois par processus : en
     créer une par test ferait échouer tous les suivants.
     """
-    app = Adw.Application(application_id="org.triat.TriatTest")
+    # NON_UNIQUE : l'application ne prend jamais le nom sur le bus (un autre
+    # processus pytest le détenant faisait échouer tous les tests).
+    app = Adw.Application(application_id="org.triat.TriatTest",
+                          flags=Gio.ApplicationFlags.NON_UNIQUE)
     # GTK exige l'enregistrement avant qu'on attache une fenêtre ; sans
     # `run()`, il faut émettre « startup » à la main.
     app.register(None)
@@ -515,8 +518,9 @@ def test_narrow_window_keeps_an_icon_rail_beside_the_content(window):
 
 
 def test_home_offers_generated_mixes(window, engine):
-    engine.library.upsert_many([TrackRef(f"id{i:04d}", f"T{i}", f"A{i % 3}", 180.0)
-                                for i in range(30)])
+    refs = [TrackRef(f"id{i:04d}", f"T{i}", f"A{i % 3}", 180.0) for i in range(30)]
+    engine.library.upsert_many(refs)
+    engine.library.add_to_playlist(engine.library.create_playlist("Ma musique"), refs)
     window.home.refresh()
     assert window.home.mixes and window.home.mixes[0].title == "Mix du jour"
     card = window.home.mix_box.get_child_at_index(0).get_child()
@@ -584,8 +588,9 @@ def test_v_key_switches_scene_and_is_remembered(window, engine):
 
 
 def test_player_bar_fullscreen_starts_something(window, engine):
-    engine.library.upsert_many([TrackRef(f"id{i:04d}", f"T{i}", "A", 180.0)
-                                for i in range(20)])
+    refs = [TrackRef(f"id{i:04d}", f"T{i}", "A", 180.0) for i in range(20)]
+    engine.library.upsert_many(refs)
+    engine.library.add_to_playlist(engine.library.create_playlist("Ma musique"), refs)
     window.home.refresh()
     window.immersion._spectrum = _FakeSpectrum()
     window.player_bar.fullscreen_button.emit("clicked")
@@ -635,7 +640,7 @@ def test_search_best_artist_opens_artist_page(window, engine):
 
 
 def test_search_finds_local_playlist(window, engine):
-    pid = engine.library.create_playlist("Soirée")
+    engine.library.create_playlist("Soirée")
     _search(window, "soiree")
     page = window.search
     assert page.best_card.best.kind == "playlist"
@@ -736,7 +741,7 @@ def sync_dialog(window, engine, monkeypatch):
     """Réglages sur le bureau de test : pas de mDNS, port choisi par l'OS."""
     from triat.ui.settings_dialog import SettingsDialog
 
-    monkeypatch.setattr(engine.sync, "_announce", lambda: None)
+    monkeypatch.setattr(engine.sync, "_announce", lambda *_a: None)
     dialog = SettingsDialog(engine)
     dialog.present(window)
     yield dialog
@@ -879,3 +884,275 @@ def test_last_sync_is_told_in_french():
     assert format_last_sync(1000.0, now=1000.0 + 300) == "Dernière synchro : il y a 5 min"
     assert format_last_sync(1000.0, now=1000.0 + 7300) == "Dernière synchro : il y a 2 h"
     assert format_last_sync(1000.0, now=1000.0 + 3 * 86400) == "Dernière synchro : il y a 3 j"
+
+
+# ---- Audit UI : toasts, navigation, raccourcis, synchro --------------------
+
+def test_toast_is_literal_text(window):
+    seen = []
+    window.toasts.add_toast = seen.append
+    window._toast("Simon & Garfunkel <3")
+    assert not seen[0].get_use_markup()
+    assert seen[0].get_title() == "Simon & Garfunkel <3"
+
+
+def test_segment_toasts_use_french_category_labels(window):
+    seen = []
+    window.toasts.add_toast = seen.append
+    seg = Segment(10.0, 20.0, "preview")
+    window._on_segment_pending(window.engine, seg)
+    window._on_segment_skipped(window.engine, seg, 10.0)
+    assert "Récapitulatif" in seen[0].get_title()
+    assert "preview" not in seen[0].get_title()
+    assert "Récapitulatif" in seen[1].get_title()
+    assert not seen[1].get_use_markup()
+
+
+def test_navigate_leaves_the_sheet(window, engine):
+    engine.emit("track-changed", TrackRef("a" * 11, "T", "A", duration=10.0))
+    window.open_sheet()
+    assert window.sheet_open
+    window._on_navigate("search")
+    assert window.stack.get_visible_child_name() == "main"
+    assert window.pages.get_visible_child_name() == "search"
+
+
+def test_artist_action_closes_the_sheet(window, engine):
+    ref = TrackRef("a" * 11, "T", "Daft Punk", duration=10.0)
+    window.open_sheet()
+    window._on_track_action("artist", ref)
+    assert not window.sheet_open
+    assert window.pages.get_visible_child_name() == "artist"
+
+
+def test_space_runs_in_capture_phase_and_toggles(window, engine, monkeypatch):
+    assert (window._space_controller.get_propagation_phase()
+            == Gtk.PropagationPhase.CAPTURE)
+    calls = []
+    monkeypatch.setattr(engine, "toggle_pause", lambda: calls.append(1))
+    monkeypatch.setattr(engine, "next", lambda: calls.append("next"))
+    window.player_bar.next_button.grab_focus()
+    assert window._sc_toggle() is True
+    assert calls == [1]
+
+
+def test_space_is_left_to_text_fields(window, engine, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "toggle_pause", lambda: calls.append(1))
+    monkeypatch.setattr(window, "get_focus", lambda: Gtk.Text())
+    assert window._sc_toggle() is False
+    assert window._sc_seek(5.0)() is False
+    assert calls == []
+
+
+def test_arrow_shortcuts_seek_and_skip(window, engine, monkeypatch):
+    engine._current_ref = TrackRef("a" * 11, "T", "A", duration=100.0)
+    engine.player.position_hint = 20.0
+    engine.player.duration = 100.0
+    window._sc_seek(5.0)()
+    window._sc_seek(-5.0)()
+    assert engine.player.seeks[-2:] == [25.0, 20.0]
+    skipped = []
+    monkeypatch.setattr(engine, "next", lambda: skipped.append("n"))
+    window._sc_skip(True)()
+    assert skipped == ["n"]
+
+
+def test_escape_closes_sheet_then_artist(window, engine):
+    window.open_sheet()
+    assert window._sc_escape() is True
+    assert not window.sheet_open
+    window.pages.set_visible_child_name("artist")
+    assert window._sc_escape() is True
+    assert window.pages.get_visible_child_name() == "library"
+    assert window._sc_escape() is False
+
+
+def test_shortcut_help_lists_the_main_keys():
+    from triat.ui.window import SHORTCUTS
+
+    accels = {accel for _title, accel in SHORTCUTS}
+    assert {"space", "<Primary>m", "Left", "<Shift>Right"} <= accels
+
+
+def test_app_accels_include_mini():
+    from triat.app import APP_ACCELS
+
+    assert APP_ACCELS["mini"] == ["<Primary>m"]
+
+
+def test_player_bar_follows_volume_changes(engine):
+    bar = PlayerBar(engine)
+    engine.set_volume(30)
+    assert bar.volume.props.volume == 30
+
+
+def test_player_bar_spinner_while_loading_or_busy(engine):
+    bar = PlayerBar(engine)
+    assert not bar.spinner.get_visible()
+    engine.emit("state-changed", "loading")
+    assert bar.spinner.get_visible()
+    engine.emit("state-changed", "playing")
+    assert not bar.spinner.get_visible()
+    engine.emit("busy", True)
+    assert bar.spinner.get_visible()
+    engine.emit("busy", False)
+    assert not bar.spinner.get_visible()
+
+
+def test_player_bar_play_label_follows_state(engine):
+    bar = PlayerBar(engine)
+    engine.emit("state-changed", "playing")
+    assert bar.play_button.get_tooltip_text() == "Pause"
+    assert isinstance(bar.expand_button, Gtk.Button)
+
+
+def test_history_cleared_refreshes_home(window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(window.home, "refresh", lambda: calls.append(1))
+    window._on_setting_changed("history_cleared", True)
+    window._on_setting_changed("private_session", True)
+    assert len(calls) == 2
+
+
+def test_home_uses_vous(window):
+    assert window.home.mixes_section is not None
+    for text in ("tu ", " ton ", "Tes "):
+        assert text not in window.home.resume.radio.get_tooltip_text()
+
+
+def test_space_activates_a_keyboard_focused_button(window, engine, monkeypatch):
+    """Focus clavier sur un bouton : Espace l'active, il ne bascule pas la
+    lecture. Après un clic souris (focus non visible), il reste lecture."""
+    calls = []
+    monkeypatch.setattr(engine, "toggle_pause", lambda: calls.append(1))
+    button = window.player_bar.next_button
+    monkeypatch.setattr(window, "get_focus", lambda: button)
+    monkeypatch.setattr(window, "get_focus_visible", lambda: True)
+    assert window._sc_toggle() is False
+    assert calls == []
+    monkeypatch.setattr(window, "get_focus_visible", lambda: False)
+    assert window._sc_toggle() is True
+    assert calls == [1]
+
+
+# ---- Accueil : mixes figés, couvertures, suggestions distantes -------------
+
+def _library_with_playlist(engine, n=12):
+    refs = [TrackRef(f"id{i:04d}", f"T{i}", f"A{i}", 180.0) for i in range(n)]
+    engine.library.add_to_playlist(engine.library.create_playlist("Ma musique"), refs)
+    return refs
+
+
+def test_home_renders_cached_mixes_without_rebuilding(window, engine, monkeypatch):
+    import datetime as dt
+    from triat.core import mixes as mixes_module
+    refs = _library_with_playlist(engine)
+    store = mixes_module.MixStore(engine.library)
+    store.save(dt.date.today(),
+               [mixes_module.Mix("daily", "Mix du jour", refs, 1)],
+               engine.library.count_owned(), 1.0)
+
+    def boom(*_a, **_k):
+        raise AssertionError("reconstruit alors que le cache est valide")
+
+    monkeypatch.setattr(mixes_module, "build_mixes", boom)
+    window.home.refresh()
+    assert [m.title for m in window.home.mixes] == ["Mix du jour"]
+    assert window.home.mix_box.get_child_at_index(0) is not None
+    assert window.home.mix_box.get_child_at_index(1) is None
+
+
+def test_home_builds_large_libraries_off_the_main_thread(window, engine, monkeypatch):
+    from triat.core import mixes as mixes_module
+    from tests.test_engine import pump
+    _library_with_playlist(engine, 40)
+    monkeypatch.setattr(mixes_module, "SYNC_BUILD_LIMIT", 0)
+    import triat.ui.window as window_module
+    monkeypatch.setattr(window_module, "SYNC_BUILD_LIMIT", 0)
+    window.home.refresh()
+    assert window.home._building         # lancé, pas encore rendu
+    assert pump(lambda: window.home.mixes)
+    assert window.home.mixes[0].title == "Mix du jour"
+    assert not window.home._building
+
+
+def test_home_playlists_use_single_query(window, engine, monkeypatch):
+    _library_with_playlist(engine, 5)
+
+    def boom(*_a, **_k):
+        raise AssertionError("une requête par playlist")
+
+    monkeypatch.setattr(engine.library, "playlist_items", boom)
+    window.home.refresh()
+    assert len(window.home.mixes_grid) == 1
+    assert window.home.mixes_grid.items[0].title == "Ma musique"
+
+
+class _StubFeed:
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        self.reset_calls = 0
+
+    def cached(self):
+        return self.snapshot
+
+    def needs_refresh(self):
+        return False
+
+    def reset(self):
+        self.reset_calls += 1
+
+
+def test_home_shows_remote_section_from_cache(window, engine):
+    from triat.core.home_feed import HomeSnapshot
+    tracks = [TrackRef(f"r{i}", f"Reco {i}", "Quelqu'un") for i in range(4)]
+    snap = HomeSnapshot("innertube", [{"title": "Recommandé pour vous",
+                                       "tracks": tracks}], 1.0, stale=False)
+    home = window.home
+    home._feed = _StubFeed(snap)
+    home.refresh()
+    assert home.remote_grid.get_visible() and len(home.remote_grid) == 4
+    assert "sans compte" in home.remote_note.get_text()
+    snap.stale = True
+    home.refresh()
+    assert "hors ligne" in home.remote_note.get_text()
+    # Ce qui est écarté disparaît du cache affiché.
+    engine.library.block("track", "r0", "Reco 0")
+    home.refresh()
+    assert len(home.remote_grid) == 3
+    home._feed = _StubFeed(None)
+    home.refresh()
+    assert not home.remote_grid.get_visible()
+
+
+def test_track_menu_block_action(window, engine):
+    refs = [TrackRef(f"v{i:04d}", f"T{i}", "Vialice" if i < 10 else f"A{i}", 180.0)
+            for i in range(30)]
+    engine.library.add_to_playlist(engine.library.create_playlist("P"), refs)
+    window.home.refresh()
+    assert any(r.artist == "Vialice" for m in window.home.mixes for r in m.refs)
+    window.actions.apply_block(refs[0], "artist")
+    assert "vialice" in engine.library.blocked()["artist"]
+    window.home.refresh()
+    assert not any(r.artist == "Vialice" for m in window.home.mixes for r in m.refs)
+    window.actions.apply_block(refs[15], "track")
+    assert refs[15].video_id in engine.library.blocked()["track"]
+
+
+def test_track_list_menu_offers_block():
+    from triat.ui.track_list import TrackList
+    view = TrackList()
+    view.set_tracks([TrackRef("v1", "Un", "A")])
+    seen = []
+    view.connect("track-action", lambda _v, name, index: seen.append((name, index)))
+    view._menu_index = 0
+    assert view.activate_action("piste.block", None)
+    assert seen == [("block", 0)]
+
+
+def test_cookie_change_clears_home_cache(window, engine):
+    engine.library.reco_cache_put("home:remote", {"source": "innertube",
+                                                  "sections": []})
+    window._on_setting_changed("cookie_source", "chrome")
+    assert engine.library.reco_cache_get("home:remote") is None

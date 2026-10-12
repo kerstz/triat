@@ -6,20 +6,26 @@ seule connexion protégée par un verrou, en mode WAL.
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from collections.abc import Iterable, Sequence
 
 from .models import Segment, TrackRef
 from .paths import db_path
+from .reco import TrackSignal, artist_key
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2   # 2 : uid des playlists et traces de suppression (synchro)
+SCHEMA_VERSION = 4   # 2 : uid des playlists et traces de suppression (synchro)
+#                      3 : index des téléchargements par video_id
+#                      4 : index playlist_items(video_id), tables reco_*
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -61,6 +67,14 @@ CREATE TABLE IF NOT EXISTS sync_tombstones (
     key  TEXT NOT NULL,
     at   REAL NOT NULL,
     PRIMARY KEY (kind, key)
+);
+
+-- Fichiers téléchargés, retrouvés par video_id : le titre ou l'album d'une
+-- piste peuvent être corrigés après coup, pas son identifiant.
+CREATE TABLE IF NOT EXISTS downloads (
+    video_id TEXT PRIMARY KEY,
+    path     TEXT NOT NULL,
+    at       REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS history (
@@ -109,6 +123,36 @@ CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
     INSERT INTO tracks_fts(rowid, title, artist, album)
     VALUES (new.rowid, new.title, new.artist, coalesce(new.album, ''));
 END;
+
+-- v4 : sans cet index, chaque filtre `_OWNED` est quadratique (74 s à 50k pistes).
+CREATE INDEX IF NOT EXISTS idx_playlist_items_video ON playlist_items(video_id);
+CREATE INDEX IF NOT EXISTS idx_tracks_artist_key ON tracks(lower(trim(artist)));
+
+-- Sauts manuels : le seul signal négatif. Jamais écrit en session privée.
+CREATE TABLE IF NOT EXISTS reco_skips (
+    video_id TEXT NOT NULL,
+    at       REAL NOT NULL,
+    position REAL NOT NULL DEFAULT 0,
+    context  TEXT NOT NULL DEFAULT ''      -- '' | 'radio' | 'mix:<clé>'
+);
+CREATE INDEX IF NOT EXISTS idx_reco_skips_video ON reco_skips(video_id, at);
+
+-- « Ne plus recommander » : 'track' (clé = video_id) ou 'artist' (clé =
+-- clé d'artiste normalisée). Local : jamais synchronisé.
+CREATE TABLE IF NOT EXISTS reco_blocklist (
+    kind  TEXT NOT NULL CHECK (kind IN ('track', 'artist')),
+    key   TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    at    REAL NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+
+-- Résultats dérivés mis en cache : 'mixes:AAAA-MM-JJ', 'home:remote'.
+CREATE TABLE IF NOT EXISTS reco_cache (
+    key        TEXT PRIMARY KEY,
+    payload    TEXT NOT NULL,              -- JSON
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -117,6 +161,12 @@ END;
 _OWNED = """(EXISTS (SELECT 1 FROM playlist_items o WHERE o.video_id = {t}.video_id)
     OR EXISTS (SELECT 1 FROM favorites o WHERE o.video_id = {t}.video_id)
     OR {t}.play_count > 0)"""
+
+
+def _decay(age, half_life):
+    """Poids d'un événement vieux de `age` secondes (fonction SQL
+    `triat_decay`, disponible même sans les fonctions maths de SQLite)."""
+    return 0.5 ** (max(float(age or 0.0), 0.0) / float(half_life))
 
 
 def _row_to_ref(row: sqlite3.Row) -> TrackRef:
@@ -134,6 +184,7 @@ class Library:
     def __init__(self, path=None) -> None:
         self._path = str(path or db_path())
         self._lock = threading.RLock()
+        self._batch_depth = 0
         try:
             self._open()
         except sqlite3.DatabaseError as exc:
@@ -145,6 +196,7 @@ class Library:
     def _open(self) -> None:
         self._db = sqlite3.connect(self._path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
+        self._db.create_function("triat_decay", 2, _decay, deterministic=True)
         try:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA foreign_keys=ON")
@@ -168,6 +220,30 @@ class Library:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    def _commit(self) -> None:
+        # Dans un `batch()`, la validation est repoussée à la sortie.
+        if self._batch_depth == 0:
+            self._db.commit()
+
+    @contextmanager
+    def batch(self):
+        """Regroupe plusieurs écritures en une seule transaction : tout est
+        validé à la sortie, ou tout est annulé si une exception passe.
+        Le verrou est tenu pendant toute la durée."""
+        with self._lock:
+            self._batch_depth += 1
+            try:
+                yield self
+            except BaseException:
+                self._batch_depth -= 1
+                if self._batch_depth == 0:
+                    self._db.rollback()
+                raise
+            else:
+                self._batch_depth -= 1
+                if self._batch_depth == 0:
+                    self._db.commit()
 
     # ---- Schéma --------------------------------------------------------
 
@@ -195,7 +271,7 @@ class Library:
                     "SELECT id FROM playlists WHERE uid IS NULL").fetchall():
                 self._db.execute("UPDATE playlists SET uid = ? WHERE id = ?",
                                  (uuid.uuid4().hex, row["id"]))
-            self._db.commit()
+            self._commit()
 
     # ---- Pistes --------------------------------------------------------
 
@@ -210,8 +286,8 @@ class Library:
                                     thumbnail, added_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(video_id) DO UPDATE SET
-                    title     = excluded.title,
-                    artist    = excluded.artist,
+                    title     = coalesce(NULLIF(excluded.title, ''), tracks.title),
+                    artist    = coalesce(NULLIF(excluded.artist, ''), tracks.artist),
                     album     = coalesce(excluded.album, tracks.album),
                     duration  = CASE WHEN excluded.duration > 0
                                      THEN excluded.duration ELSE tracks.duration END,
@@ -220,11 +296,15 @@ class Library:
                 (ref.video_id, ref.title, ref.artist, ref.album,
                  ref.duration, ref.thumbnail, time.time()),
             )
-            self._db.commit()
+            self._db.execute("UPDATE tracks SET title = 'Sans titre'"
+                             " WHERE video_id = ? AND title = ''", (ref.video_id,))
+            self._commit()
 
     def upsert_many(self, refs: Iterable[TrackRef]) -> None:
-        for ref in refs:
-            self.upsert_track(ref)
+        """Une seule transaction pour tout le lot (une validation, pas N)."""
+        with self.batch():
+            for ref in refs:
+                self.upsert_track(ref)
 
     def get_track(self, video_id: str) -> TrackRef | None:
         with self._lock:
@@ -257,20 +337,23 @@ class Library:
                 return []
         return [_row_to_ref(r) for r in rows]
 
-    def tracks_by_artist(self, artist: str, limit: int = 200) -> list[TrackRef]:
+    def tracks_by_artist(self, artist: str, limit: int = 200,
+                         owned: bool = False) -> list[TrackRef]:
         """Pistes d'un artiste déjà connues localement.
 
         Comparaison insensible à la casse et aux espaces : les métadonnées
-        YouTube ne sont pas normalisées.
+        YouTube ne sont pas normalisées. `owned` écarte le cache des
+        recherches (voir `_OWNED`) : les mixes ne doivent pas en tirer.
         """
         needle = (artist or "").strip().lower()
         if not needle:
             return []
+        mine = " AND " + _OWNED.format(t="tracks") if owned else ""
         with self._lock:
             rows = self._db.execute(
                 """
                 SELECT * FROM tracks
-                WHERE lower(trim(artist)) = ?
+                WHERE lower(trim(artist)) = ?""" + mine + """
                 ORDER BY play_count DESC, title
                 LIMIT ?
                 """,
@@ -278,12 +361,49 @@ class Library:
             ).fetchall()
         return [_row_to_ref(r) for r in rows]
 
-    def all_tracks(self, limit: int = 2000) -> list[TrackRef]:
+    def all_tracks(self, limit: int = 2000, owned: bool = False) -> list[TrackRef]:
+        """Pistes connues, récentes d'abord. `owned` écarte le cache de
+        recherche (voir `_OWNED`)."""
+        where = " WHERE " + _OWNED.format(t="tracks") if owned else ""
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM tracks ORDER BY added_at LIMIT ?", (limit,)
+                "SELECT * FROM tracks" + where + " ORDER BY added_at DESC LIMIT ?",
+                (limit,)
             ).fetchall()
         return [_row_to_ref(r) for r in rows]
+
+    # ---- Téléchargements -----------------------------------------------
+
+    def record_download(self, video_id: str, path: str) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO downloads (video_id, path, at)"
+                " VALUES (?, ?, ?)", (video_id, str(path), time.time()))
+            self._commit()
+
+    def download_path(self, video_id: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT path FROM downloads WHERE video_id = ?",
+                                   (video_id,)).fetchone()
+        return row["path"] if row else None
+
+    def download_owner(self, path: str) -> str | None:
+        """`video_id` auquel ce fichier est déjà attribué, s'il l'est."""
+        with self._lock:
+            row = self._db.execute("SELECT video_id FROM downloads WHERE path = ?",
+                                   (str(path),)).fetchone()
+        return row["video_id"] if row else None
+
+    def forget_download(self, video_id: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM downloads WHERE video_id = ?", (video_id,))
+            self._commit()
+
+    def downloaded_ids(self) -> list[str]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT video_id FROM downloads ORDER BY at DESC").fetchall()
+        return [r["video_id"] for r in rows]
 
     def added_since(self, since: float, limit: int = 500,
                     owned: bool = False) -> list[TrackRef]:
@@ -310,7 +430,7 @@ class Library:
             self._db.execute(
                 "UPDATE tracks SET duration = ? WHERE video_id = ? AND duration <= 0",
                 (float(seconds), video_id))
-            self._db.commit()
+            self._commit()
 
     def unplayed(self, limit: int = 500, owned: bool = False) -> list[TrackRef]:
         mine = " AND " + _OWNED.format(t="tracks") if owned else ""
@@ -387,7 +507,7 @@ class Library:
                     "DELETE FROM favorites WHERE video_id = ?", (ref.video_id,)
                 )
                 self._tombstone("like", ref.video_id, when)
-            self._db.commit()
+            self._commit()
 
     def toggle_favorite(self, ref: TrackRef) -> bool:
         new_state = not self.is_favorite(ref.video_id)
@@ -424,7 +544,7 @@ class Library:
                 " VALUES (?, ?, ?, ?, ?)",
                 (name, remote_id, now, now, uid or uuid.uuid4().hex),
             )
-            self._db.commit()
+            self._commit()
             return int(cur.lastrowid)
 
     def rename_playlist(self, playlist_id: int, name: str) -> None:
@@ -433,16 +553,18 @@ class Library:
                 "UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?",
                 (name, time.time(), playlist_id),
             )
-            self._db.commit()
+            self._commit()
 
-    def delete_playlist(self, playlist_id: int) -> None:
+    def delete_playlist(self, playlist_id: int, at: float | None = None) -> None:
+        """`at` : date de la suppression chez son auteur (synchro) ;
+        par défaut, maintenant."""
         with self._lock:
             row = self._db.execute("SELECT uid FROM playlists WHERE id = ?",
                                    (playlist_id,)).fetchone()
             if row is not None and row["uid"]:
-                self._tombstone("playlist", row["uid"])
+                self._tombstone("playlist", row["uid"], at)
             self._db.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
-            self._db.commit()
+            self._commit()
 
     def _tombstone(self, kind: str, key: str, at: float | None = None) -> None:
         """Trace une suppression (verrou déjà tenu par l'appelant)."""
@@ -458,14 +580,14 @@ class Library:
                 (kind, key)).fetchone()
             if row is None or row["at"] < at:
                 self._tombstone(kind, key, at)
-                self._db.commit()
+                self._commit()
 
     def set_playlist_updated(self, playlist_id: int, at: float) -> None:
         """Date de modification imposée par la synchro (celle de l'auteur)."""
         with self._lock:
             self._db.execute("UPDATE playlists SET updated_at = ? WHERE id = ?",
                              (at, playlist_id))
-            self._db.commit()
+            self._commit()
 
     def tombstones(self, kind: str) -> dict[str, float]:
         with self._lock:
@@ -488,6 +610,27 @@ class Library:
                         WHERE i.playlist_id = p.id AND t.duration > 0)
                         AS known_durations
                 FROM playlists p ORDER BY p.updated_at DESC
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def playlist_covers(self) -> list[dict]:
+        """Une ligne par playlist avec la première piste : `id, name,
+        item_count, first_id, first_thumbnail`. Une seule requête (l'accueil
+        chargeait toutes les pistes de toutes les playlists)."""
+        with self._lock:
+            rows = self._db.execute(
+                """
+                SELECT p.id, p.name, p.updated_at,
+                       (SELECT COUNT(*) FROM playlist_items i
+                        WHERE i.playlist_id = p.id) AS item_count,
+                       f.video_id AS first_id, t.thumbnail AS first_thumbnail
+                FROM playlists p
+                LEFT JOIN playlist_items f ON f.playlist_id = p.id
+                     AND f.position = (SELECT MIN(position) FROM playlist_items
+                                       WHERE playlist_id = p.id)
+                LEFT JOIN tracks t ON t.video_id = f.video_id
+                ORDER BY p.updated_at DESC, p.id
                 """
             ).fetchall()
         return [dict(r) for r in rows]
@@ -517,7 +660,7 @@ class Library:
                 "UPDATE playlists SET updated_at = ? WHERE id = ?",
                 (time.time(), playlist_id),
             )
-            self._db.commit()
+            self._commit()
         return added
 
     def playlist_items(self, playlist_id: int) -> list[TrackRef]:
@@ -547,7 +690,7 @@ class Library:
                 "UPDATE playlists SET updated_at = ? WHERE id = ?",
                 (time.time(), playlist_id),
             )
-            self._db.commit()
+            self._commit()
 
     # ---- Historique ----------------------------------------------------
 
@@ -565,7 +708,7 @@ class Library:
                 " WHERE video_id = ?",
                 (now, ref.video_id),
             )
-            self._db.commit()
+            self._commit()
 
     def history_entries(self, limit: int = 3000) -> list[tuple[TrackRef, float, float]]:
         """Écoutes récentes : (piste, date, secondes écoutées)."""
@@ -578,13 +721,14 @@ class Library:
 
     def add_history_entry(self, ref: TrackRef, at: float, seconds: float) -> bool:
         """Écoute venue d'un autre appareil. False si déjà connue (à la seconde)."""
-        self.upsert_track(ref)
         with self._lock:
             known = self._db.execute(
                 "SELECT 1 FROM history WHERE video_id = ? AND ABS(played_at - ?) < 1",
                 (ref.video_id, at)).fetchone()
-            if known is not None:
-                return False
+        if known is not None:
+            return False
+        self.upsert_track(ref)
+        with self._lock:
             self._db.execute(
                 "INSERT INTO history (video_id, played_at, seconds, completed)"
                 " VALUES (?, ?, ?, 0)", (ref.video_id, at, seconds))
@@ -592,7 +736,7 @@ class Library:
                 "UPDATE tracks SET play_count = play_count + 1,"
                 " last_played = MAX(COALESCE(last_played, 0), ?) WHERE video_id = ?",
                 (at, ref.video_id))
-            self._db.commit()
+            self._commit()
         return True
 
     def recent(self, limit: int = 50) -> list[TrackRef]:
@@ -629,36 +773,254 @@ class Library:
         return [_row_to_ref(r) for r in rows]
 
     def co_played(self, video_id: str, window: float = 1800.0,
-                  limit: int = 25) -> list[TrackRef]:
+                  limit: int = 25, now: float | None = None) -> list[TrackRef]:
         """Pistes souvent écoutées autour de celle-ci.
 
         Base de la recommandation locale : pas de modèle, juste de la
         co-occurrence dans une fenêtre temporelle. Marche hors ligne et
-        sans compte Google.
+        sans compte Google. Les co-écoutes récentes pèsent plus (décroissance)
+        et le score est divisé par la racine du nombre d'écoutes de la piste
+        voisine : un titre écouté en boucle ne co-occurre pas avec tout.
         """
+        from .reco import HALF_LIFE_PLAYS
+        at = time.time() if now is None else float(now)
         with self._lock:
             rows = self._db.execute(
                 """
-                SELECT t.*, COUNT(*) AS score
+                SELECT t.*, SUM(triat_decay(:now - b.played_at, :hl)) AS score
                 FROM history a
                 JOIN history b
-                  ON b.video_id != a.video_id
-                 AND abs(b.played_at - a.played_at) <= ?
+                  ON b.played_at BETWEEN a.played_at - :w AND a.played_at + :w
+                 AND b.video_id != a.video_id
                 JOIN tracks t ON t.video_id = b.video_id
-                WHERE a.video_id = ?
+                WHERE a.video_id = :vid AND a.played_at <= :now
                 GROUP BY b.video_id
-                ORDER BY score DESC, t.play_count DESC
-                LIMIT ?
+                ORDER BY score DESC, t.video_id
+                LIMIT :n
                 """,
-                (window, video_id, limit),
+                {"now": at, "hl": HALF_LIFE_PLAYS, "w": float(window),
+                 "vid": video_id, "n": max(int(limit), 1) * 3},
             ).fetchall()
-        return [_row_to_ref(r) for r in rows]
+        ranked = sorted(
+            rows, key=lambda r: (-r["score"] / math.sqrt(max(r["play_count"], 1)),
+                                 r["video_id"]))
+        return [_row_to_ref(r) for r in ranked[:limit]]
 
     def clear_history(self) -> None:
         with self._lock:
             self._db.execute("DELETE FROM history")
+            # Sauts et résultats en cache dérivent de l'historique ; la liste
+            # « ne plus recommander » est un choix explicite : elle reste.
+            self._db.execute("DELETE FROM reco_skips")
+            self._db.execute("DELETE FROM reco_cache")
             self._db.execute("UPDATE tracks SET play_count = 0, last_played = NULL")
-            self._db.commit()
+            self._commit()
+
+    # ---- Signaux de recommandation -------------------------------------
+
+    def count_owned(self) -> int:
+        """Nombre de pistes « à soi » (voir `_OWNED`), sans charger de ligne."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) FROM tracks WHERE " + _OWNED.format(t="tracks")
+            ).fetchone()
+        return int(row[0])
+
+    def record_skip(self, ref: TrackRef, position: float, context: str = "",
+                    at: float | None = None) -> None:
+        """Note un saut manuel : le seul signal négatif des recommandations."""
+        if not ref.video_id:
+            return
+        self.upsert_track(ref)
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO reco_skips (video_id, at, position, context)"
+                " VALUES (?, ?, ?, ?)",
+                (ref.video_id, time.time() if at is None else float(at),
+                 float(position), context))
+            self._commit()
+
+    def recent_ids(self, since: float) -> set[str]:
+        """Identifiants écoutés depuis `since` (secondes epoch)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT DISTINCT video_id FROM history WHERE played_at >= ?",
+                (since,)).fetchall()
+        return {r[0] for r in rows}
+
+    def _by_chunks(self, sql: str, ids: Sequence[str], params: tuple = ()) -> list:
+        """Exécute `sql` (contenant `{marks}`) par lots de 500 identifiants."""
+        ids = list(dict.fromkeys(ids))
+        rows: list = []
+        with self._lock:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" * len(chunk))
+                rows.extend(self._db.execute(
+                    sql.format(marks=marks), (*params, *chunk)).fetchall())
+        return rows
+
+    def skip_weights(self, video_ids: Sequence[str], now: float,
+                     half_life: float) -> dict[str, float]:
+        """Poids (avec décroissance) des sauts de chaque piste ; les pistes
+        jamais sautées sont absentes."""
+        rows = self._by_chunks(
+            "SELECT video_id, SUM(triat_decay(? - at, ?)) AS w FROM reco_skips"
+            " WHERE at <= ? AND video_id IN ({marks}) GROUP BY video_id",
+            video_ids, (now, half_life, now))
+        return {r["video_id"]: float(r["w"]) for r in rows}
+
+    def offtopic_seconds(self, video_ids: Sequence[str]) -> dict[str, float]:
+        """Secondes « hors musique » connues par le cache SponsorBlock.
+        Local uniquement : aucune requête réseau."""
+        rows = self._by_chunks(
+            "SELECT video_id, SUM(end_s - start_s) AS s FROM segments"
+            " WHERE category = 'music_offtopic' AND video_id IN ({marks})"
+            " GROUP BY video_id", video_ids)
+        return {r["video_id"]: float(r["s"]) for r in rows}
+
+    def track_signals(self, now: float, half_life: float,
+                      skip_half_life: float) -> list[TrackSignal]:
+        """Signaux de toutes les pistes « à soi » en une requête.
+
+        L'affinité cumule les écoutes avec une décroissance, pondérées par la
+        part réellement écoutée : on ne se fie pas au drapeau `completed`
+        (les écoutes synchronisées l'ont toujours à 0). Les pistes écartées
+        (« ne plus recommander ») sont absentes.
+        """
+        with self._lock:
+            rows = self._db.execute(
+                """
+                WITH owned AS (
+                  SELECT video_id FROM playlist_items
+                  UNION SELECT video_id FROM favorites
+                  UNION SELECT video_id FROM tracks WHERE play_count > 0),
+                plays AS (
+                  SELECT h.video_id,
+                    SUM(triat_decay(:now - h.played_at, :hl) *
+                      CASE WHEN h.completed = 1
+                                OR (t.duration > 0 AND h.seconds >= 0.8 * t.duration)
+                                THEN 1.0
+                           WHEN t.duration <= 0 THEN 0.6
+                           WHEN h.seconds >= 0.3 * t.duration THEN 0.5
+                           ELSE 0.2 END) AS affinity,
+                    COUNT(*) AS plays, MAX(h.played_at) AS last_at
+                  FROM history h JOIN tracks t ON t.video_id = h.video_id
+                  WHERE h.played_at <= :now GROUP BY h.video_id),
+                sk AS (SELECT video_id,
+                              SUM(triat_decay(:now - at, :shl)) AS skip_weight
+                       FROM reco_skips WHERE at <= :now GROUP BY video_id)
+                SELECT t.*, coalesce(p.affinity, 0) AS affinity,
+                       coalesce(p.plays, 0) AS plays, p.last_at,
+                       coalesce(s.skip_weight, 0) AS skip_weight,
+                       EXISTS (SELECT 1 FROM favorites f
+                               WHERE f.video_id = t.video_id) AS favorite,
+                       EXISTS (SELECT 1 FROM playlist_items i
+                               WHERE i.video_id = t.video_id) AS listed
+                FROM owned o JOIN tracks t ON t.video_id = o.video_id
+                LEFT JOIN plays p ON p.video_id = t.video_id
+                LEFT JOIN sk s ON s.video_id = t.video_id
+                WHERE NOT EXISTS (SELECT 1 FROM reco_blocklist b
+                                  WHERE b.kind = 'track' AND b.key = t.video_id)
+                ORDER BY t.video_id
+                """,
+                {"now": float(now), "hl": float(half_life),
+                 "shl": float(skip_half_life)},
+            ).fetchall()
+            banned = {r["key"] for r in self._db.execute(
+                "SELECT key FROM reco_blocklist WHERE kind = 'artist'")}
+        out: list[TrackSignal] = []
+        for r in rows:
+            ref = _row_to_ref(r)
+            if banned and artist_key(ref.artist) in banned:
+                continue
+            out.append(TrackSignal(
+                ref=ref, affinity=float(r["affinity"]), plays=int(r["plays"]),
+                last_at=r["last_at"], skip_weight=float(r["skip_weight"]),
+                favorite=bool(r["favorite"]), listed=bool(r["listed"]),
+                added_at=float(r["added_at"])))
+        return out
+
+    # ---- Liste « ne plus recommander » ---------------------------------
+
+    def block(self, kind: str, key: str, label: str = "",
+              at: float | None = None) -> None:
+        """Écarte une piste (`kind='track'`, clé = video_id) ou un artiste
+        (`kind='artist'`, clé normalisée par `artist_key`) des recommandations.
+        Local : jamais synchronisé."""
+        if kind not in ("track", "artist"):
+            raise ValueError(f"Type inconnu : {kind!r}")
+        key = artist_key(key) if kind == "artist" else (key or "").strip()
+        if not key:
+            return
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO reco_blocklist (kind, key, label, at)"
+                " VALUES (?, ?, ?, ?)",
+                (kind, key, label or "", time.time() if at is None else at))
+            self._commit()
+
+    def unblock(self, kind: str, key: str) -> None:
+        if kind == "artist":
+            key = artist_key(key)
+        with self._lock:
+            self._db.execute(
+                "DELETE FROM reco_blocklist WHERE kind = ? AND key = ?",
+                (kind, key))
+            self._commit()
+
+    def blocked(self) -> dict[str, dict[str, str]]:
+        """`{'track': {video_id: libellé}, 'artist': {clé: libellé}}`."""
+        out: dict[str, dict[str, str]] = {"track": {}, "artist": {}}
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT kind, key, label FROM reco_blocklist ORDER BY at, key"
+            ).fetchall()
+        for r in rows:
+            out[r["kind"]][r["key"]] = r["label"]
+        return out
+
+    # ---- Cache des résultats dérivés -----------------------------------
+
+    def reco_cache_get(self, key: str) -> tuple[dict, float] | None:
+        """`(charge utile, date de création)` ou None (absent, illisible)."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload, created_at FROM reco_cache WHERE key = ?",
+                (key,)).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload"])
+        except ValueError:
+            return None
+        return (payload, float(row["created_at"])) if isinstance(payload, dict) \
+            else None
+
+    def reco_cache_put(self, key: str, payload: dict,
+                       at: float | None = None) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO reco_cache (key, payload, created_at)"
+                " VALUES (?, ?, ?)",
+                (key, json.dumps(payload, ensure_ascii=False),
+                 time.time() if at is None else float(at)))
+            self._commit()
+
+    def reco_cache_clear(self, prefix: str = "", before: str | None = None) -> None:
+        """Supprime les entrées dont la clé commence par `prefix` (toutes si
+        vide) ; avec `before`, seulement celles dont la clé lui est
+        strictement inférieure (clés datées ISO : les plus anciennes)."""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%") \
+            .replace("_", "\\_")
+        sql = "DELETE FROM reco_cache WHERE key LIKE ? ESCAPE '\\'"
+        params: list = [escaped + "%"]
+        if before is not None:
+            sql += " AND key < ?"
+            params.append(before)
+        with self._lock:
+            self._db.execute(sql, params)
+            self._commit()
 
     # ---- Cache SponsorBlock -------------------------------------------
 
@@ -675,7 +1037,7 @@ class Library:
                 "INSERT OR REPLACE INTO segment_fetches VALUES (?, ?)",
                 (video_id, time.time()),
             )
-            self._db.commit()
+            self._commit()
 
     def cached_segments(self, video_id: str, max_age: float = 7 * 86400
                         ) -> list[Segment] | None:
@@ -699,12 +1061,18 @@ class Library:
     def wipe(self) -> None:
         """Efface toutes les données utilisateur (bouton « effacer mes données »)."""
         with self._lock:
+            existing = {r["name"] for r in self._db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
             for table in ("history", "playlist_items", "playlists", "favorites",
-                          "segments", "segment_fetches", "tracks", "sync_tombstones"):
-                self._db.execute(f"DELETE FROM {table}")
+                          "segments", "segment_fetches", "tracks", "sync_tombstones",
+                          "lyrics", "downloads", "reco_skips", "reco_blocklist",
+                          "reco_cache"):
+                if table in existing:
+                    self._db.execute(f"DELETE FROM {table}")
             self._db.execute("INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild')")
-            self._db.commit()
+            self._commit()
             self._db.execute("VACUUM")
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def stats(self) -> dict:
         with self._lock:
@@ -718,3 +1086,34 @@ class Library:
                 """
             ).fetchone()
         return dict(row)
+
+    # ---- Comptages (sans charger les lignes) --------------------------
+
+    def count_top_tracks(self, since: float) -> int:
+        """Nombre de pistes écoutées depuis `since` (voir `top_tracks`)."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(DISTINCT h.video_id) FROM history h"
+                " JOIN tracks t ON t.video_id = h.video_id"
+                " WHERE h.played_at >= ?", (since,)
+            ).fetchone()
+        return int(row[0])
+
+    def count_unplayed(self, owned: bool = False) -> int:
+        """Nombre de pistes jamais lues (voir `unplayed`)."""
+        mine = " AND " + _OWNED.format(t="tracks") if owned else ""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) FROM tracks WHERE play_count = 0" + mine
+            ).fetchone()
+        return int(row[0])
+
+    def count_added_since(self, since: float, owned: bool = False) -> int:
+        """Nombre de pistes entrées après `since` (voir `added_since`)."""
+        mine = " AND " + _OWNED.format(t="tracks") if owned else ""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) FROM tracks WHERE added_at >= ?" + mine,
+                (since,)
+            ).fetchone()
+        return int(row[0])

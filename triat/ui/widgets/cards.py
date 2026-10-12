@@ -11,7 +11,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
 
 from ...core.search_results import normalize
-from .common import label
+from .common import label, plural
 from .glyph import GlyphArt
 
 
@@ -35,8 +35,7 @@ class ArtistCard(Gtk.Button):
         title = label(name, "mix-name", ellipsize=3, max_width_chars=14)
         title.set_margin_top(8)
         box.append(title)
-        box.append(label(f"{count} titre" + ("s" if count > 1 else ""),
-                         "mix-detail"))
+        box.append(label(plural(count, "titre"), "mix-detail"))
         box.set_size_request(size, -1)
         self.set_child(box)
         self.update_property([Gtk.AccessibleProperty.LABEL], [f"Artiste {name}"])
@@ -49,7 +48,7 @@ class PlaylistCard(Gtk.Button):
         self.playlist_id = playlist.get("id")
         name = playlist.get("name", "Playlist")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        art = GlyphArt(grid=11, size=size, radius=20.0)
+        art = GlyphArt(grid=11, size=size, radius=6.0)
         art.set_size_request(size, size)
         art.set_halign(Gtk.Align.START)
         art.set_seed(seed_for(name))
@@ -57,7 +56,8 @@ class PlaylistCard(Gtk.Button):
         title = label(name, "mix-name", ellipsize=3, max_width_chars=14)
         title.set_margin_top(8)
         box.append(title)
-        box.append(label(f"{playlist.get('item_count', 0)} titres", "mix-detail"))
+        box.append(label(plural(playlist.get('item_count', 0), "titre"),
+                         "mix-detail"))
         box.set_size_request(size, -1)
         self.set_child(box)
         self.update_property([Gtk.AccessibleProperty.LABEL], [f"Playlist {name}"])

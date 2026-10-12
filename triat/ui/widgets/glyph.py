@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import math
 import random
-import threading
 
 import gi
 
@@ -28,6 +27,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf, GLib, Graphene, Gsk, Gtk
 
 from ...core import artwork
+from .cover import TEXTURES
 from .dot_progress import rgba
 
 log = logging.getLogger(__name__)
@@ -76,7 +76,10 @@ def motif_field(seed: int, grid: int) -> list[float]:
 def luminance_field(path: str, grid: int) -> list[float] | None:
     """Pochette réduite à `grid`×`grid` luminances, recadrée au carré."""
     try:
-        pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+        # Décodage réduit : seule une grille de quelques dizaines de points
+        # est utile, inutile de décoder l'image en pleine taille.
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+            path, max(grid * 8, 64), max(grid * 8, 64), True)
     except GLib.Error as exc:
         log.debug("Pochette illisible : %s", exc)
         return None
@@ -142,8 +145,9 @@ class GlyphArt(Gtk.Widget):
             fallback_seed or sum(map(ord, video_id)), self.grid)
         self.queue_draw()
         if url:
-            threading.Thread(target=self._load, args=(url, token),
-                             daemon=True).start()
+            # Le pool partagé de `cover` : quatre fils au plus, au lieu
+            # d'un fil par trame demandée.
+            TEXTURES.submit(self._load, url, token)
 
     def set_levels(self, levels: list[float]) -> None:
         """Spectre 0-1 par bande ; liste vide pour l'arrêter."""
@@ -255,7 +259,8 @@ class GlyphArt(Gtk.Widget):
         if width <= 0 or height <= 0:
             return
         colour = self.get_color()
-        signature = (width, height, colour.to_string(), id(self._field))
+        signature = (width, height, colour.to_string(), id(self._field),
+                     self.get_scale_factor())
         if signature != self._signature:
             self._signature = signature
             self._invalidate()

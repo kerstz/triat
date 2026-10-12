@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -94,9 +94,13 @@ class _TextureCache:
     """
 
     LIMIT = 600
+    # Un échec (hors ligne, 404) n'est pas retenté avant ce délai : sans
+    # cela, chaque défilement hors ligne relançait toutes les requêtes.
+    FAILURE_TTL = 120.0
 
     def __init__(self) -> None:
         self._textures: OrderedDict = OrderedDict()
+        self._failed: dict = {}
         self._waiting: dict = {}
         self._pool = ThreadPoolExecutor(max_workers=4,
                                         thread_name_prefix="pochettes")
@@ -110,11 +114,35 @@ class _TextureCache:
 
     def request(self, url: str, pixels: int, callback) -> None:
         key = (url, pixels)
+        failed_at = self._failed.get(key)
+        if failed_at is not None:
+            if time.monotonic() - failed_at < self.FAILURE_TTL:
+                GLib.idle_add(self._answer_failure, callback)
+                return
+            del self._failed[key]
         if key in self._waiting:
             self._waiting[key].append(callback)
             return
         self._waiting[key] = [callback]
         self._pool.submit(self._load, key)
+
+    def submit(self, function, *args) -> None:
+        """Exécute une tâche de chargement dans le pool partagé."""
+        self._pool.submit(function, *args)
+
+    @staticmethod
+    def _answer_failure(callback) -> bool:
+        callback(None)
+        return GLib.SOURCE_REMOVE
+
+    @staticmethod
+    def _texture_from(pixbuf):
+        """Texture mémoire : `Gdk.Texture.new_for_pixbuf` est dépréciée."""
+        has_alpha = pixbuf.get_has_alpha()
+        return Gdk.MemoryTexture.new(
+            pixbuf.get_width(), pixbuf.get_height(),
+            Gdk.MemoryFormat.R8G8B8A8 if has_alpha else Gdk.MemoryFormat.R8G8B8,
+            pixbuf.read_pixel_bytes(), pixbuf.get_rowstride())
 
     def _load(self, key) -> None:
         url, pixels = key
@@ -126,14 +154,22 @@ class _TextureCache:
                     str(path), pixels, pixels, True)
             except GLib.Error as exc:
                 log.debug("Pochette illisible : %s", exc)
-        GLib.idle_add(self._deliver, key, pixbuf)
+        texture = None
+        if pixbuf is not None:
+            try:
+                texture = self._texture_from(pixbuf)
+            except Exception as exc:                  # pixbuf inattendu
+                log.debug("Texture impossible : %s", exc)
+        GLib.idle_add(self._deliver, key, texture)
 
-    def _deliver(self, key, pixbuf) -> bool:
-        texture = Gdk.Texture.new_for_pixbuf(pixbuf) if pixbuf is not None else None
+    def _deliver(self, key, texture) -> bool:
         if texture is not None:
+            self._failed.pop(key, None)
             self._textures[key] = texture
             while len(self._textures) > self.LIMIT:
                 self._textures.popitem(last=False)
+        else:
+            self._failed[key] = time.monotonic()
         for callback in self._waiting.pop(key, []):
             callback(texture)
         return GLib.SOURCE_REMOVE
@@ -170,7 +206,7 @@ class Cover(Gtk.Widget):
 
     __gtype_name__ = "TriatCover"
 
-    def __init__(self, size: int = 60, radius: float = 10.0) -> None:
+    def __init__(self, size: int = 60, radius: float = 6.0) -> None:
         super().__init__()
         self.add_css_class("triat-cover")
         self._size = size

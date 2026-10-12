@@ -25,13 +25,15 @@ class NowPlayingView(Gtk.Box):
     """Vue plein écran de la piste en cours."""
 
     def __init__(self, engine, on_close=None, on_artist=None,
-                 on_immersion=None) -> None:
+                 on_immersion=None, on_action=None) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("triat-nowplaying")
         self._engine = engine
         self._on_close = on_close
         self._on_artist = on_artist
         self._on_immersion = on_immersion
+        # callable(action: str, ref) : menu contextuel de la file.
+        self._on_action = on_action
 
         self.append(self._build_header())
 
@@ -259,7 +261,7 @@ class NowPlayingView(Gtk.Box):
         self.volume.props.volume = float(engine.settings.get("volume"))
 
         self.shuffle.set_active(engine.shuffle)
-        self.shuffle.connect(
+        self._shuffle_handler = self.shuffle.connect(
             "toggled", lambda button: setattr(engine, "shuffle", button.get_active()))
         self.repeat.connect("clicked", self._cycle_repeat)
         self._show_repeat()
@@ -273,7 +275,34 @@ class NowPlayingView(Gtk.Box):
         engine.connect("position-changed", self._on_position)
         engine.connect("duration-changed", self._on_duration)
         engine.connect("queue-changed", lambda *_: self._refresh_queue())
+        engine.connect("options-changed", self._on_options)
+        engine.connect("library-changed", self._on_library_changed)
         self._refresh_queue()
+        self.queue_list.set_favorite_checker(
+            lambda ref: engine.library.is_favorite(ref.video_id))
+        self._on_state(engine, getattr(engine, "state", "idle"))
+
+    def _on_options(self, _engine) -> None:
+        """Volume, aléatoire ou répétition changés ailleurs (MPRIS, barre)."""
+        engine = self._engine
+        try:
+            self.volume.props.volume = float(engine.settings.get("volume"))
+        except (TypeError, ValueError):
+            pass
+        if self.shuffle.get_active() != bool(engine.shuffle):
+            # Le moteur ne doit pas être re-sollicité par la bascule.
+            self.shuffle.handler_block(self._shuffle_handler)
+            self.shuffle.set_active(bool(engine.shuffle))
+            self.shuffle.handler_unblock(self._shuffle_handler)
+        self._show_repeat()
+
+    def _on_library_changed(self, _engine) -> None:
+        if self._engine.current is None:
+            return
+        try:
+            self._show_favorite(bool(self._engine.is_favorite()))
+        except Exception:
+            pass
 
     def _cycle_repeat(self, _button) -> None:
         order = ("off", "all", "one")
@@ -327,9 +356,19 @@ class NowPlayingView(Gtk.Box):
         refs = self._engine.queue.items
         if not (0 <= position < len(refs)):
             return
+        ref = refs[position]
+        if self._on_action is not None:
+            self._on_action(action, ref)
+            return
         from .track_actions import TrackActions
 
-        TrackActions(self._engine, parent=self).handle(action, refs[position])
+        # Sans rappel du parent : on emprunte le toaster de la fenêtre s'il y en a un.
+        root = self.get_root()
+        toaster = getattr(root, "_toast", None)
+        TrackActions(self._engine, toaster if callable(toaster) else None,
+                     parent=self).handle(action, ref)
+        if action == "favorite":
+            self._on_library_changed(self._engine)
 
     # ---- Réactions -------------------------------------------------------
 
@@ -357,6 +396,9 @@ class NowPlayingView(Gtk.Box):
         self.play_button.set_icon_name(
             "triat-pause-symbolic" if playing
             else "triat-play-symbolic")
+        name = "Pause" if playing else "Lecture"
+        self.play_button.set_tooltip_text(name)
+        self.play_button.update_property([Gtk.AccessibleProperty.LABEL], [name])
         self.play_button.set_sensitive(state != "idle")
 
     def _on_position(self, _engine, value: float) -> None:

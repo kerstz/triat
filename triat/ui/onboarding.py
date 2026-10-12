@@ -17,12 +17,17 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk
 
 from ..core.auth import CookieError
+from ..core.desktop import (browser_label, detect_browser_profiles,
+                            inside_flatpak)
 from ..core.downloads import FORMATS
 
 log = logging.getLogger(__name__)
 
 BROWSERS = ("firefox", "chromium", "brave", "vivaldi", "librewolf")
 STEPS = 3
+# En dessous, la colonne d'identité disparaît et la carte prend toute la
+# largeur : la fenêtre descend jusqu'à 360 px.
+NARROW_BELOW = 900
 
 
 def _label(text: str, *css: str, **kwargs) -> Gtk.Label:
@@ -36,14 +41,35 @@ class OnboardingView(Gtk.Box):
     """Accueil du premier lancement. Émet `finished` quand on peut entrer."""
 
     def __init__(self, engine, on_finish) -> None:
-        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("triat-onboarding")
         self._engine = engine
         self._on_finish = on_finish
         self._step = 0
+        self._signed_in = False
 
-        self.append(self._build_left())
-        self.append(self._build_right())
+        self.content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.left = self._build_left()
+        self.right = self._build_right()
+        self.content.append(self.left)
+        self.content.append(self.right)
+
+        # Défilement : sur une fenêtre basse, la carte ne doit pas être
+        # coupée. Pas de défilement horizontal : c'est le point de rupture
+        # qui adapte la largeur.
+        self.scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        self.scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.scroller.set_child(self.content)
+
+        self.breakpoint_bin = Adw.BreakpointBin(hexpand=True, vexpand=True)
+        self.breakpoint_bin.set_size_request(360, 360)
+        narrow = Adw.Breakpoint.new(
+            Adw.BreakpointCondition.parse(f"max-width: {NARROW_BELOW}sp"))
+        narrow.add_setter(self.content, "orientation", Gtk.Orientation.VERTICAL)
+        narrow.add_setter(self.left, "visible", False)
+        self.breakpoint_bin.add_breakpoint(narrow)
+        self.breakpoint_bin.set_child(self.scroller)
+        self.append(self.breakpoint_bin)
         self._show_step(0)
 
     # ---- Colonne gauche : identité ---------------------------------------
@@ -108,11 +134,6 @@ class OnboardingView(Gtk.Box):
     def _build_right(self) -> Gtk.Widget:
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         card.add_css_class("triat-card")
-        card.set_size_request(520, -1)
-        card.set_valign(Gtk.Align.CENTER)
-        card.set_margin_end(56)
-        card.set_margin_top(40)
-        card.set_margin_bottom(40)
 
         self._step_label = _label("", "triat-label", "triat-dim")
         card.append(self._step_label)
@@ -136,6 +157,11 @@ class OnboardingView(Gtk.Box):
 
         buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         buttons.set_margin_top(8)
+        self._previous = Gtk.Button(label="Précédent")
+        self._previous.add_css_class("pill")
+        self._previous.set_size_request(-1, 44)
+        self._previous.connect("clicked", lambda *_: self._back())
+        buttons.append(self._previous)
         self._skip = Gtk.Button(label="Continuer sans compte")
         self._skip.add_css_class("pill")
         self._skip.set_size_request(-1, 44)
@@ -149,7 +175,17 @@ class OnboardingView(Gtk.Box):
         self._next_button.connect("clicked", lambda *_: self._next())
         buttons.append(self._next_button)
         card.append(buttons)
-        return card
+
+        # La carte reste lisible sur grand écran (520 px au plus) et se
+        # replie sur la largeur disponible sur petit écran.
+        clamp = Adw.Clamp(maximum_size=520, tightening_threshold=480,
+                          hexpand=True, valign=Gtk.Align.CENTER)
+        clamp.set_margin_start(20)
+        clamp.set_margin_end(20)
+        clamp.set_margin_top(24)
+        clamp.set_margin_bottom(24)
+        clamp.set_child(card)
+        return clamp
 
     def _step_account(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -160,10 +196,15 @@ class OnboardingView(Gtk.Box):
             "demandent une session YouTube.",
             "triat-body", "triat-dim", wrap=True, max_width_chars=52))
 
-        detected = self._detect_browsers()
+        self._profiles = detect_browser_profiles(BROWSERS)
+        detected = [name for name in BROWSERS if name in self._profiles]
         self._browser = Gtk.DropDown.new_from_strings(
-            [b.capitalize() for b in detected] or ["Aucun navigateur détecté"])
+            [browser_label(b) for b in detected]
+            or ["Aucun navigateur accessible" if inside_flatpak()
+                else "Aucun navigateur détecté"])
         self._browser.set_sensitive(bool(detected))
+        self._browser.update_property([Gtk.AccessibleProperty.LABEL],
+                                      ["Navigateur"])
         self._detected = detected
         box.append(self._browser)
 
@@ -175,10 +216,19 @@ class OnboardingView(Gtk.Box):
         self._import.connect("clicked", self._do_import)
         box.append(self._import)
 
+        if detected:
+            note = ("Les cookies sont chiffrés dans le trousseau du "
+                    "système, jamais écrits en clair.")
+        elif inside_flatpak():
+            note = ("Triat tourne dans un bac à sable Flatpak : les profils "
+                    "de vos navigateurs lui sont invisibles. Continuez, puis "
+                    "importez un fichier cookies.txt depuis les réglages.")
+        else:
+            note = ("Aucun profil de navigateur trouvé. Continuez : vous "
+                    "pourrez importer un fichier cookies.txt depuis les "
+                    "réglages.")
         self._account_status = _label(
-            "Les cookies sont chiffrés dans le trousseau du système, "
-            "jamais écrits en clair.",
-            "triat-body", "triat-dim", wrap=True, max_width_chars=52)
+            note, "triat-body", "triat-dim", wrap=True, max_width_chars=52)
         box.append(self._account_status)
         return box
 
@@ -205,8 +255,9 @@ class OnboardingView(Gtk.Box):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.append(_label("Qualité audio", "triat-display", "sm"))
         box.append(_label(
-            "Opus offre le meilleur rapport qualité-débit. Ce réglage vaut "
-            "pour la lecture comme pour les téléchargements.",
+            "Opus offre le meilleur rapport qualité-débit. Ce choix concerne "
+            "les fichiers téléchargés ; la qualité de lecture se règle "
+            "ensuite dans les réglages.",
             "triat-body", "triat-dim", wrap=True, max_width_chars=52))
 
         group = Adw.PreferencesGroup()
@@ -232,30 +283,27 @@ class OnboardingView(Gtk.Box):
 
     @staticmethod
     def _detect_browsers() -> list[str]:
-        """Navigateurs dont un profil existe réellement."""
-        from pathlib import Path
-
-        home = Path.home()
-        chemins = {
-            "firefox": home / ".mozilla" / "firefox",
-            "librewolf": home / ".librewolf",
-            "chromium": home / ".config" / "chromium",
-            "brave": home / ".config" / "BraveSoftware",
-            "vivaldi": home / ".config" / "vivaldi",
-        }
-        return [name for name in BROWSERS
-                if name in chemins and chemins[name].is_dir()]
+        """Navigateurs dont un profil existe réellement (natif, Flatpak
+        ou Snap)."""
+        profiles = detect_browser_profiles(BROWSERS)
+        return [name for name in BROWSERS if name in profiles]
 
     def _do_import(self, button: Gtk.Button) -> None:
         if not self._detected:
             return
         name = self._detected[self._browser.get_selected()]
+        profile = self._profiles.get(name)       # None : emplacement natif
         button.set_sensitive(False)
-        self._account_status.set_text(f"Lecture du profil {name}…")
+        self._account_status.set_text(
+            f"Lecture du profil {browser_label(name)}…")
 
         def worker() -> None:
             try:
-                status = self._engine.cookies.import_from_browser(name)
+                if profile:
+                    status = self._engine.cookies.import_from_browser(
+                        name, profile=profile)
+                else:
+                    status = self._engine.cookies.import_from_browser(name)
             except CookieError as exc:
                 GLib.idle_add(self._import_done, button, None, str(exc))
                 return
@@ -278,7 +326,8 @@ class OnboardingView(Gtk.Box):
             self._account_status.set_text(
                 f"Session trouvée : {status.count} cookies. "
                 "Les recommandations sont actives.")
-            self._skip.set_label("Passer")
+            self._signed_in = True
+            self._update_buttons()
         else:
             self._account_status.set_text(
                 "Cookies importés, mais sans session connectée. "
@@ -298,9 +347,22 @@ class OnboardingView(Gtk.Box):
             else:
                 dot.remove_css_class("triat-accent-dot")
                 dot.add_css_class("triat-chip-dot")
-        self._skip.set_visible(index == 0)
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
+        """Étape 1 : « Continuer sans compte » OU « Suivant » (une fois la
+        session importée), jamais les deux pour la même action."""
+        index = self._step
+        self._previous.set_visible(index > 0)
+        first = index == 0
+        self._skip.set_visible(first and not self._signed_in)
+        self._next_button.set_visible(not first or self._signed_in)
         self._next_button.set_label(
             "Commencer" if index == STEPS - 1 else "Suivant")
+
+    def _back(self) -> None:
+        if self._step > 0:
+            self._show_step(self._step - 1)
 
     def _next(self) -> None:
         if self._step + 1 < STEPS:

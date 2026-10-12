@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -25,6 +26,12 @@ APP_ID = "org.triat.Triat"
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 log = logging.getLogger(__name__)
+
+# Raccourcis de l'application, par action (documentés dans l'aide Ctrl+?).
+APP_ACCELS = {
+    "quit": ["<Primary>q"],
+    "mini": ["<Primary>m"],
+}
 
 
 class TriatApp(Adw.Application):
@@ -50,6 +57,10 @@ class TriatApp(Adw.Application):
         Gtk.Window.set_default_icon_name(APP_ID)
         self._load_fonts()
         self._load_css()
+        # Déconnexion ou arrêt de la session : file, position et historique
+        # sont enregistrés avant de quitter, fenêtre cachée comprise.
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, self._on_signal)
 
         self._fatal: str | None = None
         try:
@@ -62,13 +73,13 @@ class TriatApp(Adw.Application):
         self._apply_desktop_accent()
 
         for name, accels, callback in (
-            ("quit", ["<Primary>q"], lambda *_: self.quit_for_real()),
+            ("quit", APP_ACCELS["quit"], lambda *_: self.quit_for_real()),
             ("next", [], lambda *_: self._engine.next()),
             ("previous", [], lambda *_: self._engine.previous()),
             # Appelables depuis une autre instance (lanceur, barre, .desktop).
             ("show", [], lambda *_: self._show_page(None)),
             ("search", [], lambda *_: self._show_page("search")),
-            ("mini", [], lambda *_: self._remote_mini()),
+            ("mini", APP_ACCELS["mini"], lambda *_: self._remote_mini()),
             ("play-pause", [], lambda *_: self._engine.toggle_pause()),
         ):
             action = Gio.SimpleAction.new(name, None)
@@ -119,8 +130,14 @@ class TriatApp(Adw.Application):
         close.add_css_class("suggested-action")
         close.connect("clicked", lambda *_: self.quit())
         page.set_child(close)
+        # Barre de titre : sans elle, rien ne permet de déplacer ni de
+        # fermer cette fenêtre hors d'un gestionnaire tuilant.
+        toolbar = Adw.ToolbarView(content=page)
+        header = Adw.HeaderBar()
+        header.set_show_title(False)
+        toolbar.add_top_bar(header)
         window = Adw.ApplicationWindow(application=self, title="Triat",
-                                       content=page)
+                                       content=toolbar)
         window.set_default_size(560, 420)
         window.present()
 
@@ -204,6 +221,11 @@ class TriatApp(Adw.Application):
         self._teardown()
         return False        # laisser la fenêtre se fermer
 
+    def _on_signal(self) -> bool:
+        log.info("Signal d'arrêt reçu : fermeture propre")
+        self.quit_for_real()
+        return GLib.SOURCE_REMOVE
+
     def quit_for_real(self) -> None:
         """Ctrl+Q, « Quitter » de la barre : arrêt complet, lecture comprise."""
         self._quitting = True
@@ -213,6 +235,14 @@ class TriatApp(Adw.Application):
         self.quit()
 
     def _teardown(self) -> None:
+        # Le rendu mpv doit être libéré avec le contexte GL encore courant :
+        # on quitte Immersion avant d'arrêter le moteur (quit() n'émet pas
+        # « close-request »).
+        if self._window is not None:
+            try:
+                self._window.close_immersion()
+            except Exception:  # noqa: BLE001 - fenêtre déjà détruite
+                log.debug("Immersion non fermée au démontage", exc_info=True)
         if self._mpris is not None:
             self._mpris.unpublish()
             self._mpris = None

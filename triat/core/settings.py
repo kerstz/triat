@@ -50,6 +50,9 @@ DEFAULTS: dict[str, Any] = {
     "sync_devices": {},         # appareils appairés : nom, clé, dates
     "sync_server_id": "",
     "sync_share_cookies": False,  # envoyer la session YouTube au téléphone
+    # Sens de la synchro : "both" (bidirectionnel), "from_phone"
+    # (téléphone -> PC seulement), "to_phone" (PC -> téléphone seulement).
+    "sync_direction": "both",
     "eq_enabled": False,
     "eq_gains": [0.0] * 10,      # dB par bande, voir core/equalizer.py
 }
@@ -61,6 +64,7 @@ CHOICES: dict[str, tuple] = {
     "audio_quality": ("low", "normal", "high", "max"),
     "download_format": ("opus", "m4a", "mp3"),
     "immersion_mode": ("clip", "glyph"),
+    "sync_direction": ("both", "from_phone", "to_phone"),
 }
 RANGES: dict[str, tuple[float, float]] = {
     "volume": (0.0, 100.0),
@@ -137,7 +141,7 @@ class Settings:
     def save(self) -> None:
         with self._lock:
             tmp = self._path.with_suffix(".json.tmp")
-            payload = json.dumps(self._data, indent=2, ensure_ascii=False)
+            payload = json.dumps(dict(self._data), indent=2, ensure_ascii=False)
             try:
                 tmp.write_text(payload, encoding="utf-8")
                 tmp.chmod(0o600)
@@ -149,10 +153,12 @@ class Settings:
         return self._data.get(key, DEFAULTS.get(key, default))
 
     def set(self, key: str, value: Any) -> None:
-        self._data[key] = value
+        with self._lock:
+            self._data[key] = value
 
     def update(self, **kwargs: Any) -> None:
-        self._data.update(kwargs)
+        with self._lock:
+            self._data.update(kwargs)
 
     def as_dict(self) -> dict[str, Any]:
         return dict(self._data)

@@ -44,6 +44,7 @@ def config_dir() -> Path:
 def cache_dir() -> Path:
     path = _xdg("XDG_CACHE_HOME", Path.home() / ".cache")
     path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
     return path
 
 
@@ -69,7 +70,22 @@ def db_path() -> Path:
     return data_dir() / "library.db"
 
 
+def _user_music_dir() -> Path:
+    """Dossier Musique de l'utilisateur, quelle que soit la langue du
+    système (user-dirs.dirs), à défaut ~/Music."""
+    home = Path.home()
+    try:
+        from gi.repository import GLib
+        found = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_MUSIC)
+    except Exception:
+        found = None
+    # GLib renvoie le dossier personnel quand rien n'est configuré.
+    if found and Path(found) != home:
+        return Path(found)
+    return home / "Music"
+
+
 def downloads_dir() -> Path:
     raw = os.environ.get("XDG_MUSIC_DIR")
-    base = Path(raw) if raw else Path.home() / "Musique"
+    base = Path(raw) if raw else _user_music_dir()
     return base / "Triat"

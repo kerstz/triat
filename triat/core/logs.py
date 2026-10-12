@@ -36,9 +36,13 @@ def setup(level: int = logging.INFO, to_file: bool = True) -> None:
     if to_file:
         try:
             path = state_dir() / "triat.log"
-            handler = logging.handlers.RotatingFileHandler(
-                path, maxBytes=MAX_BYTES, backupCount=BACKUPS,
-                encoding="utf-8")
+            previous_mask = os.umask(0o077)       # y compris après rotation
+            try:
+                handler = logging.handlers.RotatingFileHandler(
+                    path, maxBytes=MAX_BYTES, backupCount=BACKUPS,
+                    encoding="utf-8")
+            finally:
+                os.umask(previous_mask)
             os.chmod(path, 0o600)
             handler.setFormatter(logging.Formatter(FORMAT))
             root.addHandler(handler)

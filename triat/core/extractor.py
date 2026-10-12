@@ -33,6 +33,9 @@ _RETRYABLE = (
     "requires a po token",
     "player response",
     "failed to extract",
+    "requested format is not available",
+    "http error 403",
+    "http error 429",
 )
 
 
@@ -58,6 +61,10 @@ class _QuietLogger:
         log.debug("yt-dlp: %s", str(message).splitlines()[0][:120])
 
 
+# yt-dlp n'active que deno par défaut : sans cette option, node seul serait
+# présent sur la machine mais jamais utilisé.
+JS_RUNTIMES: dict = {"deno": {}, "node": {}}
+
 BASE_OPTS: dict = {
     "format": FORMAT_SELECTOR,
     "quiet": True,
@@ -68,6 +75,7 @@ BASE_OPTS: dict = {
     "skip_download": True,
     # On ne veut que l'audio : inutile de faire résoudre les formats vidéo.
     "extract_flat": False,
+    "js_runtimes": JS_RUNTIMES,
 }
 
 
@@ -121,14 +129,23 @@ class Extractor:
     def __init__(self, cookies=None) -> None:
         """`cookies` : un CookieManager, ou None pour un accès anonyme."""
         self._cookies = cookies
+        self._preferred_client: str | None = None
 
     @property
     def _opts(self) -> dict:
-        """Options yt-dlp fraîches : les cookies peuvent changer à chaud."""
-        opts = dict(BASE_OPTS)
-        if self._cookies is not None:
-            opts.update(self._cookies.ytdlp_opts())
-        return opts
+        """Options yt-dlp fraîches."""
+        options = dict(BASE_OPTS)
+        options["js_runtimes"] = {k: dict(v) for k, v in JS_RUNTIMES.items()}
+        return options
+
+    def _ydl(self, options: dict) -> yt_dlp.YoutubeDL:
+        """Instance yt-dlp avec les cookies chargés en mémoire (jamais de
+        `cookiefile` : yt-dlp le réécrit à chaque appel)."""
+        ydl = yt_dlp.YoutubeDL(options)
+        loader = getattr(self._cookies, "load_into", None)
+        if loader is not None:
+            loader(ydl)
+        return ydl
 
     def search(self, query: str, limit: int = 20) -> list[TrackRef]:
         """Recherche YouTube via yt-dlp. Repli quand YouTube Music est muet.
@@ -141,7 +158,7 @@ class Extractor:
             return []
         opts = self._opts | {"extract_flat": "in_playlist", "skip_download": True}
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            with self._ydl(opts) as ydl:
                 info = ydl.extract_info(f"ytsearch{int(limit)}:{query}", download=False)
         except yt_dlp.utils.DownloadError as exc:
             log.warning("Recherche yt-dlp échouée: %s", exc)
@@ -178,36 +195,70 @@ class Extractor:
             # Pas une URL -> recherche YouTube, premier résultat.
             query = f"ytsearch1:{query}"
 
-        info = self._extract(query)
-        if info is None:
-            raise ExtractionError("Aucun résultat")
-        # ytsearch renvoie une playlist d'un élément.
-        if info.get("_type") == "playlist":
-            entries = info.get("entries") or []
-            if not entries:
+        def convert(info: dict | None) -> Track:
+            if info is None:
                 raise ExtractionError("Aucun résultat")
-            info = entries[0]
+            # ytsearch renvoie une playlist d'un élément.
+            if info.get("_type") == "playlist":
+                entries = info.get("entries") or []
+                if not entries:
+                    raise ExtractionError("Aucun résultat")
+                info = entries[0]
+            return self._to_track(info)
 
-        return self._to_track(info)
+        # La conversion est dans la boucle : un client qui répond sans flux
+        # exploitable laisse la main au suivant.
+        return self._extract(query, convert=convert)
 
-    def _extract(self, query: str, extra: dict | None = None) -> dict:
-        """extract_info en essayant les clients YouTube dans l'ordre."""
+    def _client_order(self) -> list[str | None]:
+        """Le dernier client qui a fonctionné passe en premier : le pire
+        cas n'est plus quatre extractions complètes à la suite."""
+        preferred = self._preferred_client
+        if preferred is None or preferred not in CLIENT_FALLBACKS:
+            return list(CLIENT_FALLBACKS)
+        return [preferred] + [c for c in CLIENT_FALLBACKS if c != preferred]
+
+    def _extract(self, query: str, extra: dict | None = None, *,
+                 convert=None, download: bool = False):
+        """extract_info en essayant les clients YouTube dans l'ordre.
+
+        `convert(info)` est appelé dans la boucle ; `download=True` lance le
+        téléchargement (options dans `extra`, ex. celles de DownloadManager).
+        """
         last_error = ""
-        for client in CLIENT_FALLBACKS:
+        for client in self._client_order():
             options = self._opts | (extra or {})
             if client is not None:
                 options = options | {
                     "extractor_args": {"youtube": {"player_client": [client]}}}
             try:
-                with yt_dlp.YoutubeDL(options) as ydl:
-                    return ydl.extract_info(query, download=False)
+                with self._ydl(options) as ydl:
+                    info = ydl.extract_info(query, download=download)
+                result = convert(info) if convert is not None else info
             except yt_dlp.utils.DownloadError as exc:
                 last_error = str(exc)
                 if not is_retryable(last_error):
                     raise ExtractionError(last_error) from exc
                 log.info("Client %s refusé, essai suivant",
                          client or "par défaut")
+                continue
+            except ExtractionError as exc:
+                last_error = str(exc)
+                log.info("Client %s sans flux exploitable, essai suivant",
+                         client or "par défaut")
+                continue
+            self._preferred_client = client
+            return result
         raise ExtractionError(last_error or "Aucun client YouTube n'a répondu")
+
+    def download(self, url: str, options: dict) -> None:
+        """Télécharge `url` avec les options données, en repliant sur les
+        autres clients YouTube comme la lecture."""
+        try:
+            check_url(url, allow_hosts=YOUTUBE_HOSTS)
+        except UnsafeURL as exc:
+            raise ExtractionError(str(exc)) from exc
+        self._extract(url, options | {"skip_download": False}, download=True)
 
     def resolve_video(self, url: str, max_height: int = 1080) -> VideoStream:
         """Flux vidéo seul d'un clip, pour l'écran Immersion. Bloquant.
@@ -260,6 +311,10 @@ class Extractor:
                     break
         if not stream_url:
             raise ExtractionError("Aucun flux audio trouvé pour cette vidéo")
+        try:
+            safe_media_url(stream_url)
+        except UnsafeURL as exc:
+            raise ExtractionError(str(exc)) from exc
 
         thumbs = info.get("thumbnails") or []
         thumbnail = info.get("thumbnail")

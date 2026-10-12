@@ -24,6 +24,8 @@ Règles :
 
 from __future__ import annotations
 
+import math
+
 from .models import TrackRef
 
 VERSION = 1
@@ -37,14 +39,26 @@ def track_to_wire(ref: TrackRef) -> dict:
             "duration": float(ref.duration or 0), "thumb": ref.thumbnail}
 
 
-def track_from_wire(data: dict) -> TrackRef | None:
+def _num(value, default: float = 0.0) -> float:
+    """Nombre fini et positif, sinon `default` : une valeur reçue du
+    téléphone n'est jamais crue (texte, NaN, infini)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return number if math.isfinite(number) and number >= 0 else default
+
+
+def track_from_wire(data) -> TrackRef | None:
+    if not isinstance(data, dict):
+        return None
     video_id = data.get("id")
     if not isinstance(video_id, str) or len(video_id) != 11:
         return None                     # pas une vidéo YouTube : ignorée
     return TrackRef(video_id=video_id,
-                    title=str(data.get("title") or "Sans titre")[:300],
+                    title=str(data.get("title") or "")[:300],
                     artist=str(data.get("artist") or "")[:200],
-                    duration=float(data.get("duration") or 0),
+                    duration=_num(data.get("duration")),
                     thumbnail=data.get("thumb") if isinstance(data.get("thumb"), str) else None)
 
 
@@ -89,9 +103,44 @@ def merge(a: dict, b: dict) -> dict:
     return {
         "v": VERSION,
         "playlists": sorted(playlists.values(), key=lambda p: p["uid"]),
-        "likes": sorted(likes.values(), key=lambda l: l["id"]),
+        "likes": sorted(likes.values(), key=lambda like: like["id"]),
         "history": recent,
     }
+
+
+def sanitize(remote: dict) -> dict | None:
+    """Instantané reçu : garde les éléments bien formés, refuse le reste.
+    None si la forme générale est fausse."""
+    clean: dict = {"v": remote.get("v")}
+    for name in ("playlists", "likes", "history"):
+        items = remote.get(name, [])
+        if not isinstance(items, list):
+            return None
+        clean[name] = [i for i in items if isinstance(i, dict)]
+    clean["playlists"] = [p for p in clean["playlists"]
+                          if isinstance(p.get("uid"), str)
+                          and len(p["uid"]) <= 64]
+    clean["likes"] = [x for x in clean["likes"] if isinstance(x.get("id"), str)]
+    clean["history"] = [x for x in clean["history"] if isinstance(x.get("id"), str)]
+    for item in (*clean["playlists"], *clean["likes"], *clean["history"]):
+        for stamp in ("updated", "at"):
+            if stamp in item:
+                try:
+                    item[stamp] = int(item[stamp])
+                except (TypeError, ValueError, OverflowError):
+                    item[stamp] = 0
+        if not isinstance(item.get("tracks", []), list):
+            item["tracks"] = []
+        else:
+            item["tracks"] = [t for t in item.get("tracks", [])
+                              if isinstance(t, dict)]
+        if "track" in item and not isinstance(item["track"], dict):
+            item["track"] = None
+        if "seconds" in item:
+            item["seconds"] = _num(item["seconds"])
+        if item.get("name") is not None and not isinstance(item["name"], str):
+            item["name"] = str(item["name"])[:200]
+    return clean
 
 
 # ---- Bibliothèque du bureau ------------------------------------------------
@@ -126,6 +175,12 @@ def apply(library, merged: dict) -> dict:
 
     Idempotent : l'appliquer deux fois ne change rien la seconde fois.
     Renvoie le nombre de changements par catégorie."""
+    # Une seule transaction : une donnée inattendue n'écrit rien à moitié.
+    with library.batch():
+        return _apply(library, merged)
+
+
+def _apply(library, merged: dict) -> dict:
     changes = {"playlists": 0, "likes": 0, "history": 0}
     local = {p["uid"]: p for p in library.list_playlists()}
 
@@ -135,7 +190,7 @@ def apply(library, merged: dict) -> dict:
         updated = playlist.get("updated", 0) / 1000
         if playlist.get("deleted"):
             if mine is not None and mine["updated_at"] <= updated:
-                library.delete_playlist(mine["id"])
+                library.delete_playlist(mine["id"], at=updated)
                 changes["playlists"] += 1
             library.record_tombstone("playlist", uid, updated)
             continue
@@ -173,6 +228,6 @@ def apply(library, merged: dict) -> dict:
     for entry in merged.get("history", []):
         ref = track_from_wire(entry.get("track") or {})
         if ref is not None and library.add_history_entry(
-                ref, entry.get("at", 0) / 1000, float(entry.get("seconds") or 0)):
+                ref, entry.get("at", 0) / 1000, _num(entry.get("seconds"))):
             changes["history"] += 1
     return changes

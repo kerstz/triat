@@ -28,6 +28,7 @@ class FakePlayer(GObject.Object):
         self.track = None
         self.seeks: list[float] = []
         self.played: list[Track] = []
+        self.starts: list[float] = []
         self.stopped = 0
         self.volume = 0.0
         self.normalisation = False
@@ -35,11 +36,12 @@ class FakePlayer(GObject.Object):
         self.video: tuple[str, str] | None = None
         self.speed = 1.0
 
-    def play_track(self, track: Track) -> None:
+    def play_track(self, track: Track, start: float = 0.0) -> None:
         self.track = track
         self.played.append(track)
+        self.starts.append(start)
         self.duration = track.duration
-        self.position_hint = 0.0
+        self.position_hint = start
         self.state = "playing"
         self.emit("state-changed", "playing")
 
@@ -134,15 +136,23 @@ class FakeSponsorBlock:
 
 
 class FakeRecommender:
-    def __init__(self, radio=None, results=None) -> None:
+    def __init__(self, radio=None, results=None, home=None) -> None:
         self._radio = radio or []
         self._results = results or []
+        self._home = home or []
+        # Un appel par radio : {"limit", "exclude", + context, private…}.
+        self.calls: list[dict] = []
+        self.last_reason = ""
 
     def search(self, query: str, limit: int = 25):
         return list(self._results)
 
-    def radio_for(self, ref, limit=25, exclude=()):
+    def radio_for(self, ref, limit=25, exclude=(), **kw):
+        self.calls.append({"limit": limit, "exclude": list(exclude), **kw})
         return [r for r in self._radio if r.video_id not in set(exclude)]
+
+    def remote_home(self):
+        return ("innertube", list(self._home))
 
 
 class FakeCookies:
@@ -169,7 +179,9 @@ class FakeCookies:
 
 
 class FakeInnerTube:
-    def related(self, video_id: str, limit: int = 25):
+    def related(self, video_id: str, limit: int = 25, ephemeral: bool = False):
+        self.related_calls = getattr(self, "related_calls", [])
+        self.related_calls.append({"video_id": video_id, "ephemeral": ephemeral})
         return []
 
     def home(self, limit: int = 40):

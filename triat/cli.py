@@ -373,6 +373,25 @@ def _ligne_synchro(settings) -> tuple[str, str, str]:
     return "synchro", niveau, texte
 
 
+def js_runtime_check() -> tuple[str, str, str]:
+    """yt-dlp résout les défis YouTube avec `yt-dlp-ejs` et un moteur JS
+    externe (deno ou node). Sans l'un des deux, de plus en plus de vidéos
+    échouent sans message clair."""
+    import importlib.util
+    import shutil
+
+    runtime = shutil.which("deno") or shutil.which("node")
+    has_ejs = importlib.util.find_spec("yt_dlp_ejs") is not None
+    if runtime and has_ejs:
+        return ("moteur js", "ok", f"{runtime} + yt-dlp-ejs")
+    missing = []
+    if not runtime:
+        missing.append("deno ou node absent")
+    if not has_ejs:
+        missing.append("paquet yt-dlp-ejs absent (pip install 'yt-dlp[default]')")
+    return ("moteur js", "warn", " · ".join(missing))
+
+
 def cmd_doctor(args) -> int:
     """Vérifie que toutes les briques externes répondent."""
     engine = Engine()
@@ -415,7 +434,7 @@ def cmd_doctor(args) -> int:
 
     # Quels clients YouTube répondent encore : c'est le point de rupture
     # numéro un de ce type d'application.
-    from .core.extractor import CLIENT_FALLBACKS, _QuietLogger
+    from .core.extractor import CLIENT_FALLBACKS, JS_RUNTIMES, _QuietLogger
 
     import yt_dlp
 
@@ -423,12 +442,13 @@ def cmd_doctor(args) -> int:
     for client in CLIENT_FALLBACKS:
         options = {"quiet": True, "no_warnings": True, "skip_download": True,
                    "format": "bestaudio/best", "noprogress": True,
-                   "logger": _QuietLogger()}
-        options.update(engine.cookies.ytdlp_opts())
+                   "logger": _QuietLogger(),
+                   "js_runtimes": {k: dict(v) for k, v in JS_RUNTIMES.items()}}
         if client is not None:
             options["extractor_args"] = {"youtube": {"player_client": [client]}}
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
+                engine.cookies.load_into(ydl)
                 info = ydl.extract_info(
                     "https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
             if info and info.get("url"):
@@ -442,6 +462,8 @@ def cmd_doctor(args) -> int:
     else:
         checks.append(("clients youtube", "fail",
                        "aucun client ne répond — voir docs/po-token.md"))
+
+    checks.append(js_runtime_check())
 
     from .core import desktop
 

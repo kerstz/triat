@@ -150,3 +150,67 @@ def focus_under_hyprland(app_id: str) -> bool:
         if result.stdout.strip() == "ok":
             return True
     return False
+
+
+# ---- Navigateurs (import des cookies) ----------------------------------------
+
+# Noms d'affichage : `str.capitalize()` donnait « Librewolf » et « Edge ».
+BROWSER_LABELS = {
+    "firefox": "Firefox",
+    "librewolf": "LibreWolf",
+    "chromium": "Chromium",
+    "chrome": "Google Chrome",
+    "brave": "Brave",
+    "vivaldi": "Vivaldi",
+    "edge": "Microsoft Edge",
+    "opera": "Opera",
+}
+
+# Dossiers de profil par navigateur, relatifs au dossier personnel. Le
+# premier est l'emplacement natif, que yt-dlp trouve seul ; les suivants
+# (Flatpak, Snap) doivent lui être donnés explicitement.
+_BROWSER_DIRS = {
+    "firefox": (".mozilla/firefox",
+                ".var/app/org.mozilla.firefox/.mozilla/firefox",
+                "snap/firefox/common/.mozilla/firefox"),
+    "librewolf": (".librewolf",
+                  ".var/app/io.gitlab.librewolf-community/.librewolf"),
+    "chromium": (".config/chromium",
+                 ".var/app/org.chromium.Chromium/config/chromium",
+                 "snap/chromium/common/chromium"),
+    "brave": (".config/BraveSoftware",
+              ".var/app/com.brave.Browser/config/BraveSoftware"),
+    "vivaldi": (".config/vivaldi",
+                ".var/app/com.vivaldi.Vivaldi/config/vivaldi"),
+    "chrome": (".config/google-chrome",
+               ".var/app/com.google.Chrome/config/google-chrome"),
+    "edge": (".config/microsoft-edge",
+             ".var/app/com.microsoft.Edge/config/microsoft-edge"),
+    "opera": (".config/opera",),
+}
+
+
+def browser_label(name: str) -> str:
+    """Nom lisible d'un navigateur (« librewolf » devient « LibreWolf »)."""
+    return BROWSER_LABELS.get(name, name.capitalize())
+
+
+def inside_flatpak() -> bool:
+    """Vrai si Triat tourne dans son propre bac à sable Flatpak, où les
+    profils de navigateur de l'hôte sont invisibles par construction."""
+    return Path("/.flatpak-info").exists()
+
+
+def detect_browser_profiles(names=None, home: Path | None = None
+                            ) -> dict[str, str | None]:
+    """Navigateurs dont un profil existe, avec le dossier à passer à
+    yt-dlp : `None` pour l'emplacement natif, un chemin pour Flatpak/Snap."""
+    home = Path(home) if home is not None else Path.home()
+    found: dict[str, str | None] = {}
+    for name in names or _BROWSER_DIRS:
+        for index, relative in enumerate(_BROWSER_DIRS.get(name, ())):
+            path = home / relative
+            if path.is_dir():
+                found[name] = None if index == 0 else str(path)
+                break
+    return found

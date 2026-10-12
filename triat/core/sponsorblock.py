@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import logging
 import urllib.error
 import urllib.parse
@@ -105,7 +106,8 @@ class SponsorBlockClient:
         url = f"{self._api_base}/{video_hash_prefix(video_id)}?{params}"
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
-            with urlopen_checked(request, self._timeout) as response:
+            with urlopen_checked(request, self._timeout,
+                                 ("sponsor.ajay.app",)) as response:
                 payload = json.loads(read_capped(response).decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -127,9 +129,11 @@ class SponsorBlockClient:
                 continue
             for raw in entry.get("segments") or []:
                 try:
-                    start, end = raw["segment"]
+                    start, end = (float(v) for v in raw["segment"])
+                    if not (math.isfinite(start) and math.isfinite(end)):
+                        continue
                     segments.append(Segment(
-                        start=float(start), end=float(end),
+                        start=start, end=end,
                         category=str(raw.get("category", "")),
                         uuid=str(raw.get("UUID", "")),
                     ))

@@ -15,7 +15,7 @@ from triat.core.engine import Engine
 from triat.core.library import Library
 from triat.core.models import Segment, TrackRef
 from triat.core.settings import Settings
-from triat.core.sponsorblock import ASK, IGNORE, SKIP
+from triat.core.sponsorblock import ASK, SKIP
 from tests.fakes import FakeExtractor, FakePlayer, FakeRecommender, FakeSponsorBlock
 
 
@@ -138,7 +138,7 @@ def test_segment_is_skipped_automatically(tmp_path):
     engine.connect("segment-skipped", lambda _e, seg, gained: skips.append((seg, gained)))
 
     engine.play_refs(refs(1))
-    assert pump(lambda: engine._planner is not None)
+    assert pump(lambda: engine._planner is not None and engine.player.played)
     engine.player.advance(1.0)
     pump(timeout=0.2)
 
@@ -161,7 +161,7 @@ def test_same_segment_is_never_skipped_twice(tmp_path):
         recommender=FakeRecommender(), ytmusic=object(), cookies=object(),
     )
     engine.play_refs(refs(1))
-    assert pump(lambda: engine._planner is not None)
+    assert pump(lambda: engine._planner is not None and engine.player.played)
     engine.player.advance(11.0)
     pump(timeout=0.1)
     # mpv renvoie souvent des positions antérieures juste après un seek.
@@ -184,7 +184,7 @@ def test_ask_policy_notifies_instead_of_skipping(tmp_path):
     pending = []
     engine.connect("segment-pending", lambda _e, seg: pending.append(seg))
     engine.play_refs(refs(1))
-    assert pump(lambda: engine._planner is not None)
+    assert pump(lambda: engine._planner is not None and engine.player.played)
     engine.player.advance(2.0)
     engine.player.advance(3.0)
     pump(timeout=0.2)
@@ -204,7 +204,7 @@ def test_cancelling_a_skip_rewinds_and_disables_it(tmp_path):
         recommender=FakeRecommender(), ytmusic=object(), cookies=object(),
     )
     engine.play_refs(refs(1))
-    assert pump(lambda: engine._planner is not None)
+    assert pump(lambda: engine._planner is not None and engine.player.played)
     engine.player.advance(11.0)
     pump(timeout=0.1)
 
@@ -546,7 +546,7 @@ def test_sync_is_off_until_enabled(engine):
 
 def test_sync_can_be_enabled_then_disabled_and_frees_the_port(engine, monkeypatch):
     import socket
-    monkeypatch.setattr(engine.sync, "_announce", lambda: None)   # pas de mDNS
+    monkeypatch.setattr(engine.sync, "_announce", lambda *_a: None)   # pas de mDNS
     assert engine.set_sync_enabled(True)
     assert engine.sync.running
     assert engine.settings.get("sync_enabled") is True
@@ -573,7 +573,7 @@ def test_shutdown_stops_the_sync_server(tmp_path, monkeypatch):
                  player=FakePlayer(), extractor=FakeExtractor(),
                  sponsorblock=FakeSponsorBlock(), recommender=FakeRecommender(),
                  ytmusic=object(), cookies=object())
-    monkeypatch.setattr(eng.sync, "_announce", lambda: None)
+    monkeypatch.setattr(eng.sync, "_announce", lambda *_a: None)
     eng.set_sync_enabled(True)
     port = eng.sync.port
     assert _listens(port)
@@ -587,3 +587,241 @@ def test_a_sync_that_changes_the_library_emits_library_changed(engine):
     engine.connect("library-changed", lambda *_: changed.append(1))
     engine.sync._on_changed({"favorites": 1})   # appelé depuis le fil du serveur
     assert pump(lambda: changed)
+
+
+# ---- Audit 2026-10-12 : événements de l'ancienne piste, précédent, URL ---
+
+def test_stale_events_are_not_credited_to_the_next_track(engine):
+    engine.play_refs(refs(4))
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(100.0)
+    engine.next()                              # v1 en cours de résolution
+    engine.player.advance(101.0)               # reliquat de v0
+    assert engine._max_position < 1.0
+    assert pump(lambda: len(engine.player.played) == 2)
+    assert engine.current.video_id == "v1"
+
+
+def test_old_eof_does_not_skip_a_second_track(engine):
+    engine.play_refs(refs(4))
+    assert pump(lambda: engine.player.played)
+    engine.next()
+    engine.player.finish()                     # fin de v0 avant le chargement de v1
+    pump(timeout=0.3)
+    assert engine.current.video_id == "v1"
+
+
+def test_previous_leaves_the_track_after_a_rewind(engine):
+    engine.play_refs(refs(3), start=1)
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(60.0)
+    engine.previous()                          # rembobine
+    assert engine.player.seeks == [0.0]
+    engine.previous()                          # position_hint = 0 : change de piste
+    assert pump(lambda: engine.current.video_id == "v0")
+
+
+def test_expired_prefetch_is_discarded(engine):
+    ref = refs(1)[0]
+    track = engine.extractor.resolve(ref.url)
+    engine._prefetched = (ref.video_id, track, time.monotonic() - 7200)
+    assert engine._take_prefetched(ref) is None
+    engine._prefetched = (ref.video_id, track, time.monotonic())
+    assert engine._take_prefetched(ref) is track
+
+
+def test_a_playback_error_retries_once_then_skips(engine):
+    engine.play_refs(refs(3))
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(42.0)
+    engine.player.emit("error", "403")
+    assert pump(lambda: len(engine.player.played) == 2)
+    assert engine.player.played[1].video_id == "v0"      # même piste, ré-résolue
+    assert engine.player.starts[-1] == 42.0
+    engine.player.emit("error", "403")
+    assert pump(lambda: len(engine.player.played) == 3)
+    assert engine.player.played[2].video_id == "v1"      # seconde panne : suivante
+
+
+def test_private_session_does_not_announce_now_playing(engine, monkeypatch):
+    engine.settings.set("private_session", True)
+    called = []
+    monkeypatch.setattr(engine.scrobbler, "now_playing", lambda ref: called.append(ref))
+    engine.play_refs(refs(1))
+    assert pump(lambda: engine.player.played)
+    assert called == []
+
+
+def test_autoplay_does_not_hammer_radio_when_it_returns_nothing(engine):
+    engine.settings.set("autoplay_radio", True)
+    calls = []
+    engine.recommender.radio_for = lambda *a, **k: calls.append(1) or []
+    engine.play_refs(refs(1))
+    assert pump(lambda: engine.player.played)
+    for pos in range(171, 190):
+        engine.player.advance(float(pos))
+        pump(timeout=0.02)
+    assert len(calls) == 1
+
+
+def test_wipe_user_data_clears_everything(engine, monkeypatch):
+    import types
+    from triat.core import artwork
+    cleared = []
+    monkeypatch.setattr(artwork, "clear_cache", lambda: cleared.append(1))
+    engine.cookies = types.SimpleNamespace(clear=lambda: cleared.append("cookies"))
+    engine.play_refs(refs(2))
+    assert pump(lambda: engine.player.played)
+    engine.settings.set("search_history", ["daft punk"])
+    engine.save_state()
+    engine.library.set_favorite(refs(1)[0], True)
+    engine.wipe_user_data()
+    assert engine.queue.items == [] and engine.current is None
+    assert engine.settings.get("last_queue") == []
+    assert engine.settings.get("search_history") == []
+    assert engine.library.list_favorites() == []
+    assert cleared == ["cookies", 1]
+
+
+def test_option_setters_emit_a_signal(engine):
+    seen = []
+    engine.connect("options-changed", lambda _e: seen.append(1))
+    engine.set_volume(40.0)
+    engine.shuffle = True
+    engine.repeat = "all"
+    assert len(seen) == 3
+
+
+# ---- Signaux de recommandation -----------------------------------------
+
+def _skips(engine, video_id=None):
+    sql = "SELECT video_id, context FROM reco_skips"
+    rows = engine.library._db.execute(sql).fetchall()
+    return [r for r in rows if video_id is None or r["video_id"] == video_id]
+
+
+def test_manual_next_records_a_skip(engine):
+    engine.play_refs(refs(2))
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(10.0)
+    engine.next()
+    assert [r["video_id"] for r in _skips(engine)] == ["v0"]
+
+
+def test_eof_stop_and_jump_are_not_skips(engine):
+    engine.play_refs(refs(4))
+    assert pump(lambda: len(engine.player.played) == 1)
+    engine.player.advance(5.0)
+    engine.player.finish()
+    assert pump(lambda: len(engine.player.played) == 2)
+    engine.player.advance(5.0)
+    engine.jump_to(3)
+    assert pump(lambda: len(engine.player.played) == 3)
+    engine.player.advance(5.0)
+    engine.stop()
+    assert _skips(engine) == []
+
+
+def test_private_session_records_no_skip(engine):
+    engine.settings.set("private_session", True)
+    engine.play_refs(refs(2))
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(10.0)
+    engine.next()
+    assert _skips(engine) == []
+
+
+def test_late_next_is_not_a_skip(engine):
+    engine.play_refs(refs(2))
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(150.0)          # 75 % d'une piste de 200 s
+    engine.next()
+    assert _skips(engine) == []
+
+
+def test_skip_after_35s_is_both_a_play_and_a_skip(engine):
+    engine.play_refs(refs(2))
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(35.0)
+    engine.next()
+    assert engine.library.stats()["plays"] == 1
+    assert len(_skips(engine, "v0")) == 1
+
+
+def _autoplay_engine(tmp_path, radio):
+    settings = Settings(tmp_path / "s.json")
+    settings.set("autoplay_radio", True)
+    settings.set("sync_port", 0)
+    return Engine(
+        settings=settings, library=Library(tmp_path / "l.db"),
+        player=FakePlayer(), extractor=FakeExtractor(),
+        sponsorblock=FakeSponsorBlock(), recommender=FakeRecommender(radio=radio),
+        ytmusic=object(), cookies=object())
+
+
+def test_autoplay_passes_context_and_private_flag(tmp_path):
+    eng = _autoplay_engine(tmp_path, [TrackRef("r1", "Radio 1")])
+    eng.play_refs(refs(14))
+    assert pump(lambda: eng.player.played)
+    eng.queue.jump_to(13)
+    assert pump(lambda: len(eng.player.played) == 2)
+    eng.player.advance(175.0)
+    assert pump(lambda: eng.recommender.calls)
+    call = eng.recommender.calls[-1]
+    assert 0 < len(call["context"]) <= 10 and call["private"] is False
+    assert "r1" in eng._radio_ids or pump(lambda: "r1" in eng._radio_ids)
+    eng.sync.stop()
+    eng.library.close()
+
+    eng = _autoplay_engine(tmp_path, [])
+    eng.settings.set("private_session", True)
+    eng.play_refs(refs(1))
+    assert pump(lambda: eng.player.played)
+    eng.player.advance(175.0)
+    assert pump(lambda: eng.recommender.calls)
+    assert eng.recommender.calls[-1]["private"] is True
+    eng.sync.stop()
+    eng.library.close()
+
+
+def test_autoplay_retries_after_backoff(engine):
+    engine.settings.set("autoplay_radio", True)
+    now = [1000.0]
+    engine._clock = lambda: now[0]
+    calls = []
+    engine.recommender.radio_for = lambda *a, **k: calls.append(1) or []
+    engine.play_refs(refs(1))
+    assert pump(lambda: engine.player.played)
+    engine.player.advance(175.0)
+    assert pump(lambda: len(calls) == 1)
+    now[0] += 30
+    engine.player.advance(176.0)
+    pump(timeout=0.1)
+    assert len(calls) == 1
+    now[0] += 31
+    engine.player.advance(177.0)
+    assert pump(lambda: len(calls) == 2)
+
+
+def test_private_session_does_not_cache_played_track(engine):
+    engine.settings.set("private_session", True)
+    engine.play_refs(refs(2))
+    assert pump(lambda: engine.player.played)
+    pump(timeout=0.1)
+    assert engine.library.get_track("v0") is None
+    engine.settings.set("private_session", False)
+    engine.play_refs(refs(1))
+    assert engine.library.get_track("v0") is not None
+
+
+def test_block_drops_upcoming_radio_items_only(engine):
+    queued = [TrackRef("mine", "À moi", "Banni"), TrackRef("keep", "Reste", "Ok")]
+    radio = [TrackRef("rad1", "Radio 1", "Banni"), TrackRef("rad2", "Radio 2", "Ok")]
+    engine.play_refs(refs(1))
+    assert pump(lambda: engine.player.played)
+    engine.enqueue(queued)
+    engine._radio_ids.update(r.video_id for r in radio)
+    engine.enqueue(radio)
+    engine.library.block("artist", "Banni", "Banni")
+    assert engine.drop_blocked_upcoming() == 1
+    assert [t.video_id for t in engine.queue.items] == ["v0", "mine", "keep", "rad2"]

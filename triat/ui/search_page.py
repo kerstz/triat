@@ -21,6 +21,23 @@ from .widgets.cards import ArtistCard, PlaylistCard, seed_for
 from .widgets.common import EmptyState, SectionTitle, label
 from .widgets.glyph import GlyphArt
 
+# Fragments d'erreurs réseau (souvent en anglais : yt-dlp, urllib, socket).
+_NETWORK_HINTS = ("urlopen", "network", "resolution", "resolve", "connection",
+                  "connect", "timed out", "timeout", "unreachable", "ssl",
+                  "temporary failure", "no route", "offline", "http error",
+                  "getaddrinfo", "name or service")
+
+
+def friendly_error(error: str) -> tuple[str, str]:
+    """Titre et détail français pour une erreur de recherche brute."""
+    low = (error or "").lower()
+    if any(hint in low for hint in _NETWORK_HINTS):
+        return ("Pas de connexion",
+                "YouTube est injoignable. Vérifiez votre connexion, puis réessayez.")
+    return ("Recherche impossible",
+            "YouTube n'a pas répondu comme prévu. Réessayez dans un instant.")
+
+
 FILTERS = (("all", "Tout"), ("tracks", "Titres"),
            ("artists", "Artistes"), ("playlists", "Playlists"))
 TOP_TRACKS = 5
@@ -89,6 +106,10 @@ class SearchPage(Gtk.Box):
         self._on_artist = on_artist
         self._on_playlist = on_playlist
         self.results_data = None
+        # Numéro de la dernière recherche : une réponse tardive d'une
+        # requête précédente ne doit pas écraser la plus récente.
+        self._seq = 0
+        self._last_query = ""
 
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
         column.set_margin_bottom(24)
@@ -220,6 +241,7 @@ class SearchPage(Gtk.Box):
         self.entry.grab_focus()
 
     def _on_escape(self, _entry) -> None:
+        self._seq += 1            # une réponse en vol n'a plus d'objet
         self.entry.set_text("")
         self.results_data = None
         self._show_history()
@@ -239,8 +261,16 @@ class SearchPage(Gtk.Box):
         if not query:
             return
         self._remember(query)
-        self._show_message("Recherche en cours…", "")
-        self._engine.search_all_async(query, self._on_results)
+        self._seq += 1
+        seq = self._seq
+        self._last_query = query
+        self._show_message("Recherche en cours…", "", busy=True)
+
+        def deliver(results, error) -> None:
+            if seq == self._seq:
+                self._on_results(results, error)
+
+        self._engine.search_all_async(query, deliver)
 
     def _remember(self, query: str) -> None:
         settings = getattr(self._engine, "settings", None)
@@ -253,7 +283,10 @@ class SearchPage(Gtk.Box):
 
     def _on_results(self, results, error: str | None) -> None:
         if error:
-            self._show_message("Recherche impossible", error)
+            title, detail = friendly_error(error)
+            self._show_message(title, detail, action="Réessayer",
+                               on_action=lambda: self.run_search(
+                                   self._last_query))
             return
         if results is None or results.empty:
             self._show_message("Aucun résultat", "Essayez d'autres mots.")
@@ -309,13 +342,15 @@ class SearchPage(Gtk.Box):
         if button.get_active():
             self.views.set_visible_child_name(key)
 
-    def _show_message(self, title: str, detail: str) -> None:
+    def _show_message(self, title: str, detail: str, busy: bool = False,
+                      action: str | None = None, on_action=None) -> None:
         self.views.set_visible(False)
         self.chips.set_visible(False)
         self.history_title.set_visible(False)
         self.history.set_visible(False)
         self.empty.set_visible(True)
-        self.empty.set_message(title, detail)
+        self.empty.set_message(title, detail, busy=busy, action=action,
+                               on_action=on_action)
 
     def _show_history(self) -> None:
         self._show_message(

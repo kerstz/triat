@@ -1,13 +1,16 @@
-"""Fenêtre principale de Triat — squelette visuel (M0).
+"""Fenêtre principale de Triat.
 
-Structure conforme à design/GTK.md §1 : sidebar 248 px + contenu, barre de
-lecture persistante de 96 px, accueil en état vide. Aucune donnée réelle :
-le branchement sur l'Engine viendra avec M1.
+Structure conforme à design/GTK.md §1 : navigation (rail ou libellés) +
+pages, bandeau de lecture persistant, « Lecture en cours » et Immersion en
+plein écran par-dessus. Tout le contenu vient de l'Engine.
 """
 
 from __future__ import annotations
 
 import datetime
+import os
+import threading
+import time
 
 from gi.repository import Adw, GLib, Gtk
 
@@ -18,15 +21,17 @@ from .now_playing import NowPlayingView
 from .onboarding import OnboardingView
 from .immersion import ImmersionView
 from .search_page import SearchPage
-from .settings_dialog import SettingsDialog
+from .settings_dialog import CATEGORY_LABELS, SettingsDialog
 from .track_actions import TrackActions
 from ..core.models import TrackRef
 from .track_grid import TrackGrid
-from .track_list import TrackList, format_time
+from .track_list import format_time
 from .widgets.common import EmptyState, SectionTitle, accent_dot, label
 from .widgets.cover import Cover
 from .widgets.glyph import GlyphArt
-from ..core.mixes import build_mixes
+from ..core.home_feed import HomeFeed
+from ..core.mixes import SYNC_BUILD_LIMIT, MixStore, filter_blocked
+from ..core.reco import is_blocked
 from .widgets.dot_progress import DotProgressBar
 from .widgets.dot_volume import DotVolume
 
@@ -37,6 +42,26 @@ JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi",
 MOIS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
         "août", "septembre", "octobre", "novembre", "décembre")
 
+# Saut des flèches gauche / droite, en secondes.
+SEEK_STEP = 5.0
+
+# Aide des raccourcis (Ctrl+?) : titre, accélérateur.
+SHORTCUTS = (
+    ("Lecture / pause", "space"),
+    ("Reculer de 5 s", "Left"),
+    ("Avancer de 5 s", "Right"),
+    ("Piste précédente", "<Shift>Left"),
+    ("Piste suivante", "<Shift>Right"),
+    ("Rechercher", "<Primary>f"),
+    ("Lecture en cours", "<Primary>l"),
+    ("Plein écran (Immersion)", "<Primary>i"),
+    ("Mini-lecteur", "<Primary>m"),
+    ("Réglages", "<Primary>comma"),
+    ("Fermer la vue ouverte", "Escape"),
+    ("Raccourcis clavier", "<Primary>question"),
+    ("Quitter", "<Primary>q"),
+)
+
 # « Radio » n'est plus une page : c'est une action (tuile de l'accueil).
 NAV_ITEMS = (
     ("home", "Accueil", "triat-home-symbolic"),
@@ -44,6 +69,27 @@ NAV_ITEMS = (
     ("library", "Bibliothèque", "triat-library-symbolic"),
     ("downloads", "Hors-ligne", "triat-downloads-symbolic"),
 )
+
+
+def make_toast(message: str, timeout: int = 5) -> Adw.Toast:
+    """Toast au texte littéral.
+
+    `use-markup` vaut vrai par défaut : un titre contenant « & » ou « < »
+    (« Simon & Garfunkel », une URL) donnait un toast vide."""
+    return Adw.Toast(title=message, timeout=timeout, use_markup=False)
+
+
+def is_hyprland() -> bool:
+    """Sous Hyprland la fenêtre reste nue : le gestionnaire la tuile et la
+    déplace. Ailleurs, on fournit une poignée et les boutons de fenêtre."""
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return True
+    return "hyprland" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+
+
+def category_label(category: str) -> str:
+    """Nom français d'une catégorie SponsorBlock."""
+    return CATEGORY_LABELS.get(category, (category,))[0]
 
 
 def overline(text: str) -> Gtk.Label:
@@ -209,6 +255,7 @@ class Sidebar(Gtk.Box):
                 button.add_css_class("active")
             else:
                 button.remove_css_class("active")
+            button.update_state([Gtk.AccessibleState.SELECTED], [int(name == key)])
 
 
 class ResumeCard(Gtk.Box):
@@ -242,7 +289,7 @@ class ResumeCard(Gtk.Box):
         self.primary.add_css_class("suggested-action")
         self.radio = Gtk.Button(label="Ma radio")
         self.radio.add_css_class("pill")
-        self.radio.set_tooltip_text("Enchaîne sur ce que tu écoutes")
+        self.radio.set_tooltip_text("Enchaîne sur ce que vous écoutez")
         self.fullscreen = Gtk.Button(label="Plein écran")
         self.fullscreen.add_css_class("pill")
         self.fullscreen.set_tooltip_text("Le clip, ou la matrice de points (Ctrl+I)")
@@ -257,8 +304,8 @@ class ResumeCard(Gtk.Box):
         if ref is None:
             self.art.set_seed(7)
             self.kicker.set_text("Rien n'a encore été écouté")
-            self.title.set_text("Cherche un titre pour commencer")
-            self.artist.set_text("Ou importe une playlist depuis la Bibliothèque.")
+            self.title.set_text("Cherchez un titre pour commencer")
+            self.artist.set_text("Ou importez une playlist depuis la Bibliothèque.")
             self.primary.set_label("Rechercher")
             self.radio.set_visible(False)
             self.fullscreen.set_visible(False)
@@ -295,7 +342,10 @@ class MixCard(Gtk.Button):
         box.append(label(mix.subtitle, "mix-detail", wrap=True, lines=2,
                          ellipsize=3, max_width_chars=20))
         self.set_child(box)
-        self.set_tooltip_text(mix.subtitle)
+        # « Parce que… » : la raison d'abord, puis le détail.
+        reason = getattr(mix, "reason", "")
+        self.set_tooltip_text(f"{reason}\n{mix.subtitle}" if reason
+                              else mix.subtitle)
         self.update_property([Gtk.AccessibleProperty.LABEL],
                              [f"{mix.title}, {mix.subtitle}"])
 
@@ -304,7 +354,7 @@ class HomePage(Gtk.Box):
     """Accueil : reprendre, mixes, réécoute, playlists (screens.md §1)."""
 
     def __init__(self, engine=None, on_play=None, on_immersion=None,
-                 on_search=None) -> None:
+                 on_search=None, feed=None) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("triat-content")
         self._engine = engine
@@ -312,6 +362,18 @@ class HomePage(Gtk.Box):
         self._on_immersion = on_immersion
         self._on_search = on_search
         self.mixes = []
+        # Mixes figés pour la journée et accueil distant en cache : l'accueil
+        # s'ouvre sur le local, le reste arrive ensuite (jamais sur le fil
+        # GTK pour le réseau ni pour une grosse bibliothèque).
+        self._store = MixStore(engine.library) if engine is not None else None
+        if feed is None and engine is not None and hasattr(
+                engine.recommender, "remote_home"):
+            feed = HomeFeed(engine.library, engine.recommender)
+        self._feed = feed
+        self._building = False       # construction des mixes en arrière-plan
+        self._build_dirty = False    # un refresh est arrivé pendant ce temps
+        self._fetching = False       # requête distante en cours
+        self._has_recent = False
 
         scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -334,7 +396,7 @@ class HomePage(Gtk.Box):
             engine.connect("library-changed", lambda *_: self._on_library_changed())
 
         # --- Mixes ---
-        self.mixes_section = SectionTitle("Mixes pour toi")
+        self.mixes_section = SectionTitle("Mixes pour vous")
         column.append(self.mixes_section)
         self.mix_box = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
                                    homogeneous=True, column_spacing=4,
@@ -344,6 +406,16 @@ class HomePage(Gtk.Box):
         self.mix_box.set_margin_bottom(18)
         column.append(self.mix_box)
 
+        # --- Suggestions distantes (cache, puis réseau en arrière-plan) ---
+        self.remote_title = SectionTitle("Suggestions")
+        self.remote_note = label("", "triat-dim", wrap=True)
+        self.remote_grid = TrackGrid(cover_size=120)
+        self.remote_grid.connect("item-activated", self._play_remote)
+        self.remote_grid.set_margin_bottom(18)
+        for widget in (self.remote_title, self.remote_note, self.remote_grid):
+            widget.set_visible(False)
+            column.append(widget)
+
         # --- Écouter à nouveau ---
         self.recent_title = SectionTitle("Écouter à nouveau")
         column.append(self.recent_title)
@@ -352,20 +424,20 @@ class HomePage(Gtk.Box):
         self.recent_grid.set_margin_bottom(18)
         self.recent_empty = EmptyState(
             "Rien pour l'instant",
-            "Ton historique d'écoute apparaîtra ici. Il reste sur cet "
+            "Votre historique d'écoute apparaîtra ici. Il reste sur cet "
             "ordinateur.")
         column.append(self.recent_grid)
         column.append(self.recent_empty)
 
         # --- Playlists ---
-        self.mixes_title = SectionTitle("Tes playlists")
+        self.mixes_title = SectionTitle("Vos playlists")
         column.append(self.mixes_title)
         self.mixes_grid = TrackGrid(cover_size=120)
         self.mixes_grid.connect("item-activated", self._play_mix)
         self.mixes_empty = EmptyState(
             "Aucune playlist",
-            "Importe un fichier de liens YouTube depuis la Bibliothèque "
-            "pour créer ta première playlist.")
+            "Importez un fichier de liens YouTube depuis la Bibliothèque "
+            "pour créer votre première playlist.")
         column.append(self.mixes_grid)
         column.append(self.mixes_empty)
 
@@ -400,7 +472,10 @@ class HomePage(Gtk.Box):
         self.resume.show(ref, playing, is_current)
 
     def refresh(self) -> None:
-        """Recharge toutes les sections depuis la bibliothèque."""
+        """Recharge toutes les sections depuis la bibliothèque.
+
+        Local d'abord et tout de suite ; les mixes d'une grosse bibliothèque
+        et les suggestions distantes arrivent ensuite, sans bloquer."""
         self._show_resume()
         if self._engine is None:
             self.recent_grid.set_visible(False)
@@ -409,7 +484,82 @@ class HomePage(Gtk.Box):
             return
         library = self._engine.library
 
-        self.mixes = build_mixes(library)
+        self._refresh_mixes(library)
+
+        recent = library.recent(limit=18)
+        self.recent_grid.set_items(recent)
+        self.recent_grid.set_visible(bool(recent))
+        self._has_recent = bool(recent)
+        self._update_empty_states()
+
+        # Chaque playlist est représentée par la pochette de sa première
+        # piste : c'est ce que l'utilisateur reconnaît. Une seule requête.
+        covers, badges, self._playlist_ids = [], {}, []
+        for item in library.playlist_covers():
+            if not item["first_id"] or not item["item_count"]:
+                continue
+            cover = TrackRef(video_id=item["first_id"], title=item["name"],
+                             artist="", thumbnail=item["first_thumbnail"])
+            covers.append(cover)
+            badges[cover.video_id] = f"{item['item_count']} titres"
+            self._playlist_ids.append(item["id"])
+
+        self.mixes_grid.set_items(covers, badges)
+        self.mixes_grid.set_visible(bool(covers))
+        self.mixes_empty.set_visible(not covers)
+
+        self._refresh_remote(library)
+
+    def _update_empty_states(self) -> None:
+        # Sans historique mais avec des mixes, la section vide n'apprend rien.
+        self.recent_title.set_visible(self._has_recent or not self.mixes)
+        self.recent_empty.set_visible(not self._has_recent and not self.mixes)
+
+    # ---- Mixes -------------------------------------------------------------
+
+    def _refresh_mixes(self, library) -> None:
+        today = datetime.date.today()
+        cached = self._store.load(today)
+        if cached is not None:
+            self._render_mixes(cached)
+        elif library.count_owned() <= SYNC_BUILD_LIMIT:
+            self._render_mixes(self._store.get_or_build(today, time.time()))
+        else:
+            # Grosse bibliothèque : on garde les vignettes affichées et on
+            # construit hors du fil GTK.
+            self._start_mix_build(today)
+
+    def _start_mix_build(self, today) -> None:
+        if self._building:
+            self._build_dirty = True
+            return
+        self._building = True
+        store = self._store
+
+        def worker() -> None:
+            try:
+                mixes = store.get_or_build(today, time.time())
+            except Exception:
+                mixes = None
+            GLib.idle_add(self._mixes_built, mixes)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _mixes_built(self, mixes) -> bool:
+        self._building = False
+        if mixes is not None:
+            self._render_mixes(mixes)
+            self._update_empty_states()
+        if self._build_dirty:
+            self._build_dirty = False
+            self.refresh()
+        return GLib.SOURCE_REMOVE
+
+    def _render_mixes(self, mixes) -> None:
+        # Le filtre est appliqué à l'affichage : écarter un titre ne demande
+        # pas de reconstruire les mixes figés.
+        blocked = self._engine.library.blocked()
+        self.mixes = filter_blocked(mixes, blocked)
         child = self.mix_box.get_first_child()
         while child is not None:
             following = child.get_next_sibling()
@@ -422,30 +572,66 @@ class HomePage(Gtk.Box):
         self.mixes_section.set_visible(bool(self.mixes))
         self.mix_box.set_visible(bool(self.mixes))
 
-        recent = library.recent(limit=18)
-        self.recent_grid.set_items(recent)
-        self.recent_grid.set_visible(bool(recent))
-        # Sans historique mais avec des mixes, la section vide n'apprend rien.
-        self.recent_title.set_visible(bool(recent) or not self.mixes)
-        self.recent_empty.set_visible(not recent and not self.mixes)
+    # ---- Suggestions distantes ---------------------------------------------
 
-        # Chaque playlist est représentée par la pochette de sa première
-        # piste : c'est ce que l'utilisateur reconnaît.
-        playlists = library.list_playlists()
-        covers, badges, self._playlist_ids = [], {}, []
-        for item in playlists:
-            tracks = library.playlist_items(item["id"])
-            if not tracks:
-                continue
-            cover = TrackRef(video_id=tracks[0].video_id, title=item["name"],
-                             artist="", thumbnail=tracks[0].thumbnail)
-            covers.append(cover)
-            badges[cover.video_id] = f"{item['item_count']} titres"
-            self._playlist_ids.append(item["id"])
+    def reset_remote(self) -> None:
+        """Cookies changés ou données effacées : cache jeté, rechargement."""
+        if self._feed is not None:
+            self._feed.reset()
 
-        self.mixes_grid.set_items(covers, badges)
-        self.mixes_grid.set_visible(bool(covers))
-        self.mixes_empty.set_visible(not covers)
+    def _refresh_remote(self, library) -> None:
+        feed = self._feed
+        if feed is None:
+            return
+        self._render_remote(feed.cached(), library)
+        if not self._fetching and feed.needs_refresh():
+            self._fetching = True
+
+            def worker() -> None:
+                try:
+                    snapshot = feed.refresh()
+                except Exception:
+                    snapshot = None
+                GLib.idle_add(self._remote_done, snapshot)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+    def _remote_done(self, snapshot) -> bool:
+        self._fetching = False
+        if snapshot is not None and self._engine is not None:
+            self._render_remote(snapshot, self._engine.library)
+        return GLib.SOURCE_REMOVE
+
+    def _render_remote(self, snapshot, library) -> None:
+        tracks, title = [], ""
+        if snapshot is not None:
+            blocked = library.blocked()
+            for section in snapshot.sections:
+                tracks = [t for t in section["tracks"]
+                          if not is_blocked(t, blocked)][:18]
+                if tracks:
+                    title = section.get("title") or "Suggestions"
+                    break
+        shown = bool(tracks)
+        if shown:
+            self.remote_title.title.set_text(title)
+            self.remote_grid.set_items(tracks)
+            note = ("Selon votre compte YouTube Music"
+                    if snapshot.source == "ytmusic"
+                    else "Suggestions YouTube, sans compte")
+            if snapshot.stale:
+                age = max(0.0, time.time() - snapshot.fetched_at)
+                ago = (f"{int(age // 3600)} h" if age < 48 * 3600
+                       else f"{int(age // 86400)} j")
+                note += f" · hors ligne, mis à jour il y a {ago}"
+            self.remote_note.set_text(note)
+        for widget in (self.remote_title, self.remote_note, self.remote_grid):
+            widget.set_visible(shown)
+
+    def _play_remote(self, _grid, position: int) -> None:
+        refs = self.remote_grid.items
+        if self._on_play and 0 <= position < len(refs):
+            self._on_play(refs, position)
 
     # ---- Lecture ---------------------------------------------------------
 
@@ -518,15 +704,30 @@ class PlayerBar(Gtk.Box):
                              max_width_chars=30)
         titles.append(self._title)
         titles.append(self._artist)
-        left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10,
+        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10,
+                          valign=Gtk.Align.CENTER)
+        content.append(self.cover)
+        content.append(titles)
+        # Zone « ouvrir Lecture en cours » : un vrai bouton, focalisable au
+        # clavier et annoncé par les lecteurs d'écran.
+        self.expand_button = Gtk.Button(child=content, valign=Gtk.Align.CENTER)
+        self.expand_button.add_css_class("flat")
+        self.expand_button.add_css_class("triat-expand")
+        self.expand_button.set_tooltip_text("Lecture en cours (Ctrl+L)")
+        self.expand_button.update_property(
+            [Gtk.AccessibleProperty.LABEL], ["Ouvrir Lecture en cours"])
+        # Chargement : le moteur met 1 à 3 s à démarrer une piste.
+        self.spinner = Gtk.Spinner(valign=Gtk.Align.CENTER)
+        self.spinner.set_visible(False)
+        self.spinner.update_property(
+            [Gtk.AccessibleProperty.LABEL], ["Chargement"])
+        left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
                        valign=Gtk.Align.CENTER)
-        left.add_css_class("triat-expand")
-        left.append(self.cover)
-        left.append(titles)
-        left.set_tooltip_text("Lecture en cours (Ctrl+L)")
-        self.expand_gesture = Gtk.GestureClick()
-        left.add_controller(self.expand_gesture)
+        left.append(self.expand_button)
+        left.append(self.spinner)
         row.set_start_widget(left)
+        self._loading = False
+        self._busy = False
 
         # --- centre : transport ---
         transport = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4,
@@ -582,9 +783,11 @@ class PlayerBar(Gtk.Box):
         self.prev_button.connect("clicked", lambda *_: engine.previous())
         self.progress.connect("seek-requested",
                               lambda _w, value: engine.seek(value))
-        self.volume.connect("volume-changed",
-                            lambda _w, value: engine.set_volume(value))
+        self._volume_handler = self.volume.connect(
+            "volume-changed", lambda _w, value: engine.set_volume(value))
         self.volume.props.volume = float(engine.settings.get("volume"))
+        engine.connect("options-changed", self._on_options)
+        engine.connect("busy", self._on_busy)
 
         engine.connect("track-changed", self._on_track)
         engine.connect("state-changed", self._on_state)
@@ -630,7 +833,30 @@ class PlayerBar(Gtk.Box):
             "triat-pause-symbolic" if playing
             else "triat-play-symbolic")
         self.play_button.set_sensitive(state != "idle")
-        self.play_button.set_tooltip_text("Pause" if playing else "Lecture")
+        name = "Pause" if playing else "Lecture"
+        self.play_button.set_tooltip_text(name)
+        self.play_button.update_property([Gtk.AccessibleProperty.LABEL], [name])
+        self._loading = state == "loading"
+        self._update_spinner()
+
+    def _on_busy(self, _engine, busy: bool) -> None:
+        self._busy = busy
+        self._update_spinner()
+
+    def _update_spinner(self) -> None:
+        active = self._loading or self._busy
+        self.spinner.set_visible(active)
+        self.spinner.set_spinning(active)
+
+    def _on_options(self, engine) -> None:
+        """Volume changé ailleurs (Lecture en cours, MPRIS) : la barre suit,
+        sans rappeler le moteur."""
+        value = float(engine.settings.get("volume"))
+        self.volume.handler_block(self._volume_handler)
+        try:
+            self.volume.props.volume = value
+        finally:
+            self.volume.handler_unblock(self._volume_handler)
 
     def _on_position(self, _engine, value: float) -> None:
         self.progress.props.position = value
@@ -721,13 +947,23 @@ class TriatWindow(Adw.ApplicationWindow):
 
         # Coquille : navigation + pages, bandeau de lecture dessous.
         shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        # Hors Hyprland, rien d'autre ne permet de déplacer, réduire ou
+        # fermer la fenêtre : une poignée fine et les boutons de fenêtre.
+        self.window_bar = Gtk.WindowHandle()
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        bar.append(Gtk.Box(hexpand=True))
+        bar.append(Gtk.WindowControls(side=Gtk.PackType.END))
+        self.window_bar.set_child(bar)
+        self.window_bar.set_visible(not is_hyprland())
+        shell.append(self.window_bar)
         shell.append(self.body)
         shell.append(self.player_bar)
         self.shell = shell
         if engine is not None:
             self.now_playing = NowPlayingView(engine, on_close=self.close_sheet,
                                            on_artist=self.show_artist,
-                                           on_immersion=self.open_immersion)
+                                           on_immersion=self.open_immersion,
+                                           on_action=self._on_track_action)
         else:
             self.now_playing = None
 
@@ -771,8 +1007,8 @@ class TriatWindow(Adw.ApplicationWindow):
         self.refresh_sidebar()
         if engine is not None:
             self._connect_engine(engine)
-            self.player_bar.expand_gesture.connect(
-                "released", lambda *_: self.open_sheet())
+            self.player_bar.expand_button.connect(
+                "clicked", lambda *_: self.open_sheet())
             self.player_bar.fullscreen_button.connect(
                 "clicked", lambda *_: self.home._start_immersion(None))
 
@@ -800,11 +1036,20 @@ class TriatWindow(Adw.ApplicationWindow):
         if key == "immersion_mode" and self.immersion is not None:
             self.immersion.set_mode(_value, remember=False)
             return
-        if key in ("cookie_source", "wiped"):
+        if key in ("cookie_source", "wiped", "history_cleared",
+                   "private_session", "blocklist"):
+            if key in ("cookie_source", "wiped"):
+                # Les suggestions distantes dépendent du compte : cache jeté.
+                try:
+                    self.engine.library.reco_cache_clear("home:")
+                except Exception:
+                    pass
+                self.home.reset_remote()
             self.home.refresh()
             if self.library is not None:
                 self.library.refresh()
-            self._toast("Réglages appliqués")
+            if key in ("cookie_source", "wiped"):
+                self._toast("Réglages appliqués")
 
     # ---- Vue plein écran -------------------------------------------------
 
@@ -890,30 +1135,23 @@ class TriatWindow(Adw.ApplicationWindow):
             self.now_playing.set_segments(segments)
 
     def _toast(self, message: str, timeout: int = 5) -> None:
-        self.toasts.add_toast(Adw.Toast(title=message, timeout=timeout))
+        self.toasts.add_toast(make_toast(message, timeout))
 
     def _on_error(self, _engine, message: str) -> None:
         self._toast(message, timeout=6)
 
     def _on_segment_skipped(self, _engine, segment, gained: float) -> None:
         # Toast SponsorBlock avec possibilité d'annuler (DESIGN.md §6).
-        libelle = {
-            "music_offtopic": "Passage non musical",
-            "sponsor": "Sponsor",
-            "selfpromo": "Auto-promotion",
-            "intro": "Intro",
-            "outro": "Outro",
-            "interaction": "Rappel d'abonnement",
-        }.get(segment.category, segment.category)
-        toast = Adw.Toast(
-            title=f"{libelle} sauté · {format_time(gained)}", timeout=5)
+        libelle = category_label(segment.category)
+        toast = make_toast(f"{libelle} sauté · {format_time(gained)}")
         toast.set_button_label("Annuler")
         toast.connect("button-clicked",
                       lambda *_: self.engine.cancel_segment(segment))
         self.toasts.add_toast(toast)
 
     def _on_segment_pending(self, _engine, segment) -> None:
-        toast = Adw.Toast(title=f"Segment {segment.category} détecté", timeout=6)
+        toast = make_toast(
+            f"{category_label(segment.category)} détecté", timeout=6)
         toast.set_button_label("Sauter")
         toast.connect("button-clicked",
                       lambda *_: self.engine.skip_segment(segment))
@@ -921,6 +1159,9 @@ class TriatWindow(Adw.ApplicationWindow):
 
     def _on_track_action(self, action: str, ref) -> None:
         if action == "artist":
+            # Depuis la file de « Lecture en cours » : on quitte la feuille
+            # pour montrer la page de l'artiste.
+            self.close_sheet()
             self.show_artist(ref.artist if ref else "")
             return
         if self.actions is not None:
@@ -949,19 +1190,98 @@ class TriatWindow(Adw.ApplicationWindow):
 
     # ---- Raccourcis ------------------------------------------------------
 
+    def _typing(self) -> bool:
+        """Vrai si le clavier appartient à autre chose que la lecture : un
+        champ de saisie, ou un dialogue ouvert par-dessus la fenêtre."""
+        if self.get_visible_dialog() is not None:
+            return True
+        focus = self.get_focus()
+        return isinstance(focus, (Gtk.Editable, Gtk.TextView))
+
+    def _focus_wants_space(self) -> bool:
+        """Vrai si l'utilisateur a mis, au clavier, le focus sur un bouton,
+        une case ou une ligne de liste : Espace doit alors l'activer. Après
+        un simple clic souris, le focus n'est pas « visible » et Espace
+        reste la touche lecture/pause."""
+        try:
+            if not self.get_focus_visible():
+                return False
+        except Exception:
+            return False
+        widget = self.get_focus()
+        while widget is not None:
+            if isinstance(widget, (Gtk.Button, Gtk.CheckButton, Gtk.Switch,
+                                   Gtk.ListBoxRow, Gtk.ListView,
+                                   Gtk.GridView, Gtk.ColumnView)):
+                return True
+            widget = widget.get_parent()
+        return False
+
+    def _sc_toggle(self, *_args) -> bool:
+        if self._typing() or self.engine is None:
+            return False
+        if self._focus_wants_space():
+            return False                # le widget focalisé s'en charge
+        self.engine.toggle_pause()
+        return True
+
+    def _sc_seek(self, delta: float):
+        def seek(*_args) -> bool:
+            engine = self.engine
+            if self._typing() or engine is None or engine.current is None:
+                return False
+            target = max(0.0, engine.player.position_hint + delta)
+            duration = engine.player.duration or 0.0
+            if duration > 0:
+                target = min(target, duration)
+            engine.seek(target)
+            return True
+        return seek
+
+    def _sc_skip(self, forward: bool):
+        def skip(*_args) -> bool:
+            if self._typing() or self.engine is None:
+                return False
+            if forward:
+                self.engine.next()
+            else:
+                self.engine.previous()
+            return True
+        return skip
+
+    def _sc_escape(self, *_args) -> bool:
+        """Échap : referme ce qui a été ouvert par-dessus, puis la page
+        d'artiste. Un champ de saisie garde sa propre touche Échap."""
+        if self._typing():
+            return False
+        if self.immersion is not None and self.immersion.active:
+            self.close_immersion()
+            return True
+        if self.sheet_open:
+            self.close_sheet()
+            return True
+        if (self.stack.get_visible_child_name() == "main"
+                and self.pages.get_visible_child_name() == "artist"):
+            self._on_navigate("library")
+            return True
+        return False
+
     def _install_shortcuts(self) -> None:
+        # Espace en phase de capture : un bouton cliqué garde le focus et
+        # consommerait Espace (« Suivant » saute alors encore). Les autres
+        # touches restent en bulle : le widget focalisé passe d'abord.
+        capture = Gtk.ShortcutController()
+        capture.set_scope(Gtk.ShortcutScope.GLOBAL)
+        capture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        self._space_controller = capture
         controller = Gtk.ShortcutController()
         controller.set_scope(Gtk.ShortcutScope.GLOBAL)
+        self._shortcut_controller = controller
 
-        def add(accel: str, callback) -> None:
-            controller.add_shortcut(Gtk.Shortcut(
+        def add(target, accel: str, callback) -> None:
+            target.add_shortcut(Gtk.Shortcut(
                 trigger=Gtk.ShortcutTrigger.parse_string(accel),
                 action=Gtk.CallbackAction.new(callback)))
-
-        def toggle(*_args) -> bool:
-            if self.engine is not None:
-                self.engine.toggle_pause()
-            return True
 
         def focus_search(*_args) -> bool:
             self._on_navigate("search")
@@ -982,12 +1302,45 @@ class TriatWindow(Adw.ApplicationWindow):
                 self.open_immersion()
             return True
 
-        add("space", toggle)
-        add("<Primary>f", focus_search)
-        add("<Primary>l", open_now_playing)
-        add("<Primary>comma", open_prefs)
-        add("<Primary>i", toggle_immersion)
+        def help_(*_args) -> bool:
+            self.show_shortcuts()
+            return True
+
+        add(capture, "space", self._sc_toggle)
+        add(controller, "<Primary>f", focus_search)
+        add(controller, "<Primary>l", open_now_playing)
+        add(controller, "<Primary>comma", open_prefs)
+        add(controller, "<Primary>i", toggle_immersion)
+        add(controller, "<Primary>question", help_)
+        add(controller, "<Primary><Shift>slash", help_)
+        add(controller, "Left", self._sc_seek(-SEEK_STEP))
+        add(controller, "Right", self._sc_seek(SEEK_STEP))
+        add(controller, "<Shift>Left", self._sc_skip(False))
+        add(controller, "<Shift>Right", self._sc_skip(True))
+        add(controller, "Escape", self._sc_escape)
+        self.add_controller(capture)
         self.add_controller(controller)
+
+    def show_shortcuts(self) -> None:
+        """Fenêtre d'aide des raccourcis (Ctrl+?)."""
+        if getattr(Adw, "ShortcutsDialog", None) is not None:
+            dialog = Adw.ShortcutsDialog()
+            section = Adw.ShortcutsSection(title="Triat")
+            for title, accel in SHORTCUTS:
+                section.add(Adw.ShortcutsItem.new(title, accel))
+            dialog.add(section)
+            dialog.present(self)
+            return
+        win = Gtk.ShortcutsWindow(modal=True, transient_for=self)
+        section = Gtk.ShortcutsSection(section_name="shortcuts",
+                                       title="Raccourcis")
+        group = Gtk.ShortcutsGroup(title="Triat")
+        for title, accel in SHORTCUTS:
+            group.add_shortcut(Gtk.ShortcutsShortcut(title=title,
+                                                     accelerator=accel))
+        section.add_group(group)
+        win.add_section(section)
+        win.present()
 
     # ---- Navigation ------------------------------------------------------
 
@@ -1021,6 +1374,14 @@ class TriatWindow(Adw.ApplicationWindow):
             self.now_playing.set_narrow(narrow)
 
     def _on_navigate(self, key: str) -> None:
+        # Ctrl+F, « triat --search » ou la barre latérale ne doivent pas
+        # agir en coulisses derrière Lecture en cours ou Immersion. Pendant
+        # l'accueil guidé, on ne quitte rien.
+        if self.stack.get_visible_child_name() != "onboarding":
+            self.close_immersion()
+            self.close_sheet()
+        if key not in ("home", "search", "library", "downloads"):
+            return
         self.sidebar.select(key)
         if key == "home":
             self.home.refresh()
@@ -1036,5 +1397,3 @@ class TriatWindow(Adw.ApplicationWindow):
         elif key == "downloads" and self.downloads is not None:
             self.pages.set_visible_child_name("downloads")
             self.downloads.refresh()
-        else:
-            self.toasts.add_toast(Adw.Toast(title="Écran à venir", timeout=2))

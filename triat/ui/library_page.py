@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import random
 import threading
+import time
 
 import gi
 
@@ -20,10 +21,10 @@ from gi.repository import Adw, Gio, GLib, Gtk
 
 from ..core.importer import (ImportError_,
                              export_playlist, import_playlist)
-from ..core.smart import smart_playlists
+from ..core.smart import DAY, smart_playlists
 from .track_list import TrackList
 from .widgets.cards import ArtistCard, seed_for
-from .widgets.common import EmptyState, SectionTitle, label
+from .widgets.common import EmptyState, SectionTitle, label, plural
 from .widgets.glyph import GlyphArt
 
 log = logging.getLogger(__name__)
@@ -32,8 +33,10 @@ TABS = (("playlists", "Playlists"), ("artists", "Artistes"),
         ("favorites", "Favoris"), ("history", "Historique"))
 
 
-def _plural(count: int, noun: str) -> str:
-    return f"{count} {noun}{'s' if count > 1 else ''}"
+# Plafond des listes : le même que celui de `smart_playlists`.
+SMART_LIMIT = 500
+
+_plural = plural
 
 
 def _total(seconds: float) -> str:
@@ -207,7 +210,7 @@ class LibraryPage(Gtk.Box):
 
         # --- Vue d'ensemble des playlists ---
         overview = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
-        overview.append(SectionTitle("Smart playlists"))
+        overview.append(SectionTitle("Listes intelligentes"))
         # FlowBox : quatre tuiles sur une ligne quand il y a la place, deux
         # sinon. Une Box homogène imposait 580 px de large à la fenêtre.
         self.smart_row = Gtk.FlowBox(homogeneous=True, column_spacing=10,
@@ -293,13 +296,24 @@ class LibraryPage(Gtk.Box):
                                    max_children_per_line=8)
         self.artists.set_selection_mode(Gtk.SelectionMode.NONE)
         self.artists.set_valign(Gtk.Align.START)
-        self.views.add_named(self._scrolled(self.artists), "artists")
+        artists_view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.artists_empty = EmptyState(
+            "Aucun artiste",
+            "Les artistes de vos playlists, favoris et écoutes "
+            "apparaîtront ici.")
+        artists_view.append(self.artists_empty)
+        artists_view.append(self._scrolled(self.artists))
+        self.views.add_named(artists_view, "artists")
 
         # --- Favoris, historique ---
         self.plain = TrackList()
         self.plain.connect("track-activated", self._on_track_activated)
         self.plain.connect("track-action", self._relay_action)
-        self.views.add_named(self._scrolled(self.plain), "tracks")
+        plain_view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.plain_empty = EmptyState("", "")
+        plain_view.append(self.plain_empty)
+        plain_view.append(self._scrolled(self.plain))
+        self.views.add_named(plain_view, "tracks")
 
         engine.connect("library-changed", lambda *_: self._on_library_changed())
         self.refresh()
@@ -344,8 +358,19 @@ class LibraryPage(Gtk.Box):
                     else self._engine.library.recent(limit=500))
             self.plain.set_tracks(refs)
             noun = "favori" if key == "favorites" else "écoute"
-            self.status.set_text(_plural(len(refs), noun) if refs
-                                 else "Rien ici pour l'instant")
+            self.status.set_text(_plural(len(refs), noun) if refs else "")
+            self.plain_empty.set_visible(not refs)
+            self.plain.set_visible(bool(refs))
+            if not refs:
+                if key == "favorites":
+                    self.plain_empty.set_message(
+                        "Aucun favori",
+                        "Appuyez sur le cœur d'un titre pour le retrouver ici.")
+                else:
+                    self.plain_empty.set_message(
+                        "Aucune écoute",
+                        "Les titres que vous écoutez apparaîtront ici, "
+                        "sauf en session privée.")
             self.views.set_visible_child_name("tracks")
         self._mark_current()
 
@@ -360,15 +385,37 @@ class LibraryPage(Gtk.Box):
             f"{_plural(len(items), 'playlist')}, {_plural(total, 'piste')}"
             if items else "")
         for tile in self.smart_tiles:
-            tile.set_count(len(tile.smart.fetch()))
+            tile.set_count(self._smart_count(tile.smart))
         for item in items:
             self.playlists.append(PlaylistRow(item, self._play_playlist))
+
+    def _smart_count(self, smart) -> int:
+        """Nombre de titres d'une liste intelligente, sans charger 500 lignes.
+
+        « Hors-ligne » doit interroger le disque : elle seule passe par
+        `fetch`."""
+        library = self._engine.library
+        now = time.time()
+        try:
+            if smart.key == "repeat":
+                count = library.count_top_tracks(now - 30 * DAY)
+            elif smart.key == "unplayed":
+                count = library.count_unplayed(owned=True)
+            elif smart.key == "recent":
+                count = library.count_added_since(now - 14 * DAY, owned=True)
+            else:
+                return len(smart.fetch())
+        except AttributeError:      # bibliothèque sans comptages
+            return len(smart.fetch())
+        return min(count, SMART_LIMIT)
 
     def _load_artists(self) -> None:
         self.artists.remove_all()
         artists = self._engine.library.artists(limit=200, owned=True)
         self.status.set_text(_plural(len(artists), "artiste") if artists
-                             else "Aucun artiste pour l'instant")
+                             else "")
+        self.artists_empty.set_visible(not artists)
+        self.artists.set_visible(bool(artists))
         for name, count in artists:
             card = ArtistCard(name, count, size=120)
             card.connect("clicked", self._open_artist)
@@ -564,7 +611,8 @@ class LibraryPage(Gtk.Box):
                 self._toaster(f"Export impossible : {exc}")
             return
         if self._toaster:
-            self._toaster(f"{len(refs)} pistes exportées vers {path.name}")
+            s = "s" if len(refs) > 1 else ""
+            self._toaster(f"{len(refs)} piste{s} exportée{s} vers {path.name}")
 
     # ---- Import ----------------------------------------------------------
 
@@ -595,7 +643,7 @@ class LibraryPage(Gtk.Box):
     def start_import(self, path: str) -> None:
         """Importe en arrière-plan, l'interface reste réactive."""
         self.import_button.set_sensitive(False)
-        self.status.set_text("import en cours…")
+        self.status.set_text("Import en cours…")
 
         def worker() -> None:
             try:
@@ -614,7 +662,7 @@ class LibraryPage(Gtk.Box):
     def _import_done(self, playlist_id, name, count: int, error) -> bool:
         self.import_button.set_sensitive(True)
         if error:
-            self.status.set_text("import échoué")
+            self.status.set_text("Import échoué")
             if self._toaster is not None:
                 self._toaster(f"Import impossible : {error}")
             return GLib.SOURCE_REMOVE
@@ -626,5 +674,5 @@ class LibraryPage(Gtk.Box):
         self._notify_sidebar()
         self._engine.backfill_durations_async()
         if self._toaster is not None:
-            self._toaster(f"« {name} » importée : {count} pistes")
+            self._toaster(f"« {name} » importée : {_plural(count, 'piste')}")
         return GLib.SOURCE_REMOVE

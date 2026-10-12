@@ -98,6 +98,43 @@ def test_pair_then_sync_merges_both_ways(server):
     assert server.changed                          # l'interface sera prévenue
 
 
+def test_direction_from_phone_updates_desktop_only(server):
+    server.settings.set("sync_direction", "from_phone")
+    pid = server.library.create_playlist("Bureau")
+    server.library.add_to_playlist(pid, [TrackRef(f"{1:011d}", "T1", "A", 120.0)])
+    phone = Phone(server.port)
+    assert phone.pair(server.begin_pairing())
+    mine = {"v": 1, "playlists": [{"uid": "pl-phone", "name": "Téléphone",
+                                   "updated": 1_700_000_000_000, "deleted": False,
+                                   "tracks": [track(2)]}],
+            "likes": [], "history": []}
+    status, reply = phone.sync(mine)
+    assert status == 200
+    # Le téléphone ne reçoit que ce qu'il a envoyé : il ne change pas.
+    assert {p["name"] for p in reply["playlists"]} == {"Téléphone"}
+    # Le PC a bien absorbé la playlist du téléphone.
+    assert {p["name"] for p in server.library.list_playlists()} == {"Bureau", "Téléphone"}
+
+
+def test_direction_to_phone_updates_phone_only(server):
+    server.settings.set("sync_direction", "to_phone")
+    pid = server.library.create_playlist("Bureau")
+    server.library.add_to_playlist(pid, [TrackRef(f"{1:011d}", "T1", "A", 120.0)])
+    phone = Phone(server.port)
+    assert phone.pair(server.begin_pairing())
+    mine = {"v": 1, "playlists": [{"uid": "pl-phone", "name": "Téléphone",
+                                   "updated": 1_700_000_000_000, "deleted": False,
+                                   "tracks": [track(2)]}],
+            "likes": [], "history": []}
+    status, reply = phone.sync(mine)
+    assert status == 200
+    # Le téléphone reçoit la fusion : il gagne la playlist du PC.
+    assert {p["name"] for p in reply["playlists"]} == {"Bureau", "Téléphone"}
+    # Le PC, lui, ne change pas.
+    assert {p["name"] for p in server.library.list_playlists()} == {"Bureau"}
+    assert not server.changed
+
+
 def test_cookies_only_when_shared(server):
     server.settings.set("sync_share_cookies", True)
     phone = Phone(server.port)
@@ -142,3 +179,114 @@ def test_hello_announces_the_desktop(server):
     with urllib.request.urlopen(f"http://127.0.0.1:{server.port}/v1/hello") as r:
         info = json.loads(r.read())
     assert info["app"] == "triat" and info["name"] == "Bureau"
+
+
+def test_pairing_uri_se_relit():
+    from urllib.parse import urlparse, parse_qs
+    from triat.core.sync import pairing_uri
+    u = urlparse(pairing_uri("192.168.1.5", 47823, "abcd-efgh", "id&x=1"))
+    q = parse_qs(u.query)
+    assert (u.scheme, u.netloc) == ("triat", "pair")
+    assert q == {"host": ["192.168.1.5"], "port": ["47823"],
+                 "code": ["ABCDEFGH"], "id": ["id&x=1"]}
+
+
+def test_malformed_payloads_get_a_clean_error(server):
+    phone = Phone(server.port)
+    assert phone.pair(server.begin_pairing())
+    status, _ = phone.sync({"v": 1, "playlists": "oops"})
+    assert status == 400
+    status, body = phone.post("/v1/pair/start", b"[1, 2]")
+    assert status == 400
+    status, merged = phone.sync({"v": 1, "playlists": [], "likes": [], "history": []})
+    assert status == 200                           # le serveur continue de répondre
+
+
+def test_internal_error_is_a_500_not_a_dropped_socket(server, monkeypatch):
+    phone = Phone(server.port)
+    assert phone.pair(server.begin_pairing())
+
+    def boom(*a, **k):
+        raise RuntimeError("bug")
+    monkeypatch.setattr(sync_state, "apply", boom)
+    status, _ = phone.sync({"v": 1, "playlists": [], "likes": [], "history": []})
+    assert status == 500
+    monkeypatch.undo()
+    assert phone.sync({"v": 1, "playlists": [], "likes": [], "history": []})[0] == 200
+
+
+def test_unknown_device_is_refused_before_reading_the_body(server):
+    phone = Phone(server.port, "inconnu")
+    status, _ = phone.post("/v1/sync", b"x" * 100, {"X-Triat-Device": "inconnu"})
+    assert status == 401
+
+
+def test_forgotten_device_does_not_come_back(server):
+    phone = Phone(server.port)
+    assert phone.pair(server.begin_pairing())
+    server.forget_device("telephone-1")
+    assert phone.sync({"v": 1, "playlists": [], "likes": [], "history": []})[0] == 401
+    assert server.devices() == {}
+
+
+def test_pending_pairings_are_bounded(server):
+    server.begin_pairing()
+    codes = []
+    for i in range(sync.MAX_PENDING + 1):
+        _priv, pub = sync.new_keypair()
+        codes.append(Phone(server.port, f"p{i}").post("/v1/pair/start", json.dumps(
+            {"device_id": f"p{i}", "name": "x", "pub": sync.b64(pub)}).encode())[0])
+    assert codes[-1] == 429 and codes[0] == 200
+
+
+def test_only_local_clients_are_served():
+    assert sync._is_local_client("192.168.1.5")
+    assert sync._is_local_client("::ffff:10.0.0.2")
+    assert not sync._is_local_client("8.8.8.8")
+
+
+def test_local_ipv4_skips_virtual_interfaces(monkeypatch):
+    import types
+    import ifaddr
+
+    def adapter(name, ip):
+        return types.SimpleNamespace(nice_name=name, name=name,
+                                     ips=[types.SimpleNamespace(ip=ip)])
+    monkeypatch.setattr(ifaddr, "get_adapters", lambda: [
+        adapter("docker0", "172.17.0.1"), adapter("tailscale0", "100.101.1.2"),
+        adapter("wlan0", "192.168.1.10"), adapter("eth0", "169.254.3.4")])
+    monkeypatch.setattr(sync.socket, "socket", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    assert sync._local_ipv4() == ["192.168.1.10"]
+
+
+def test_start_does_not_block_on_mdns(tmp_path, monkeypatch):
+    import threading
+    import time
+    import zeroconf
+    registered = threading.Event()
+
+    class Slow:
+        def register_service(self, info):
+            time.sleep(0.5)
+            registered.set()
+
+        def unregister_service(self, info): ...
+        def close(self): ...
+        def update_service(self, info): ...
+
+    monkeypatch.setattr(zeroconf, "Zeroconf", Slow)
+    settings = Settings(tmp_path / "s.json")
+    settings.set("sync_port", 0)
+    library = Library(tmp_path / "l.db")
+    srv = sync.SyncServer(library, settings, name="Bureau")
+    t0 = time.time()
+    assert srv.start(announce=True)
+    assert time.time() - t0 < 0.3
+    assert registered.wait(3)
+    srv.stop()
+    library.close()
+
+
+def test_pairing_uri_carries_several_hosts():
+    uri = sync.pairing_uri(["192.168.1.2", "10.0.0.2"], 47823, "ABCD2345", "id1")
+    assert uri.count("host=") == 2 and uri.index("192.168.1.2") < uri.index("10.0.0.2")

@@ -92,10 +92,17 @@ def test_materialized_file_is_private(manager, cookie_file):
     assert mode == 0o600, f"le fichier de cookies doit être 0600, trouvé {oct(mode)}"
 
 
-def test_ytdlp_opts_point_to_the_file(manager, cookie_file):
+def test_ytdlp_gets_cookies_in_memory_not_a_file(manager, cookie_file):
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
     manager.import_file(cookie_file)
-    opts = manager.ytdlp_opts()
-    assert opts["cookiefile"] == manager.cookie_file()
+    assert manager.ytdlp_opts() == {}          # jamais de `cookiefile`
+
+    class FakeYDL:
+        cookiejar = YoutubeDLCookieJar()
+
+    assert manager.load_into(FakeYDL())
+    assert any(c.name for c in FakeYDL.cookiejar)
 
 
 def test_cookie_header_keeps_only_google_domains(manager, cookie_file):

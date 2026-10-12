@@ -8,7 +8,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
 import pytest
-from gi.repository import Adw
+from gi.repository import Adw, Gio
 
 from triat.core.engine import Engine
 from triat.core.library import Library
@@ -23,7 +23,8 @@ Adw.init()
 
 @pytest.fixture(scope="session")
 def application():
-    app = Adw.Application(application_id="org.triat.TriatMiniTest")
+    app = Adw.Application(application_id="org.triat.TriatMiniTest",
+                          flags=Gio.ApplicationFlags.NON_UNIQUE)
     app.register(None)
     app.emit("startup")
     return app
