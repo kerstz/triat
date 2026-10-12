@@ -10,12 +10,8 @@
 -- « \. » et non « %. ». Un motif Lua ici ne matcherait aucune fenêtre.
 local APP = "org\\.triat\\.Triat"
 
--- Fenêtre principale : gérée en tuilage comme les autres applications.
--- On se contente de lui laisser une taille de départ confortable.
-hl.window_rule({
-    name  = "triat-main",
-    match = { class = "^(" .. APP .. ")$", title = "^(Triat)$" },
-})
+-- Fenêtre principale : aucune règle. Elle reste gérée en tuilage comme les
+-- autres applications, avec la taille que lui donne l'application.
 
 -- Mini-lecteur : petite fenêtre flottante, épinglée sur tous les bureaux.
 -- Wayland interdit à une application de se placer « toujours au-dessus » :

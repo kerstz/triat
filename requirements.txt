@@ -3,7 +3,8 @@
 # créé avec --system-site-packages.
 python-mpv>=1.0.7
 ytmusicapi>=1.12
-yt-dlp>=2026.8.19
+yt-dlp[default]>=2026.8.19
 keyring>=25
 zeroconf>=0.140      # annonce de la synchro sur le Wi-Fi (mDNS)
 cryptography>=42     # chiffrement de la synchro (ECDH, AES-GCM)
+qrcode>=7.4     # QR code d'appairage du téléphone

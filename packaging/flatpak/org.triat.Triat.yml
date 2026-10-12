@@ -1,7 +1,9 @@
 # Triat — manifeste Flatpak durci
 #
 # Principe : aucune permission qui ne soit strictement nécessaire, et un
-# libmpv réduit à l'audio. Le confinement est la principale protection
+# libmpv sans lecteur en ligne de commande ni scripts. Il garde la vidéo et
+# l'API de rendu OpenGL : l'écran Immersion dessine le clip dans une
+# Gtk.GLArea (mpv_render_context). Le confinement est la principale protection
 # contre les deux risques résiduels de l'audit (docs/security/) : yt-dlp et
 # ffmpeg analysent tous deux des données distantes non fiables.
 #
@@ -13,7 +15,23 @@ app-id: org.triat.Triat
 runtime: org.gnome.Platform
 runtime-version: '51'
 sdk: org.gnome.Sdk
-command: rien
+command: triat
+
+# FFmpeg complet : le runtime GNOME n'embarque que ffmpeg-free, sans une
+# bonne partie des codecs (AAC, H.264) que sert YouTube. L'extension se
+# monte dans /app/lib/ffmpeg.
+# TODO : vérifier `version` contre le runtime-version choisi (l'extension
+# suit la version de org.freedesktop.Platform, pas celle de GNOME).
+add-extensions:
+  org.freedesktop.Platform.ffmpeg-full:
+    directory: lib/ffmpeg
+    version: '26.08'
+    add-ld-path: .
+    autodownload: true
+    autodelete: false
+
+cleanup-commands:
+  - mkdir -p ${FLATPAK_DEST}/lib/ffmpeg
 
 finish-args:
   # --- Indispensable ------------------------------------------------------
@@ -43,12 +61,21 @@ finish-args:
   # --- Fichiers -----------------------------------------------------------
   # Un seul sous-dossier, créé au besoin. Surtout PAS --filesystem=home :
   # cela donnerait accès aux profils de navigateur, aux clés SSH, à tout.
+  # Triat télécharge dans <dossier Musique>/Triat (core/paths.py,
+  # `downloads_dir`). Flatpak résout `xdg-music` d'après les dossiers
+  # utilisateur de l'hôte, quelle que soit la langue ; l'application lit
+  # le même dossier avec GLib.get_user_special_dir.
+  # `--filesystem=xdg-music` entier donnerait accès à toute la musique de
+  # l'utilisateur sans nécessité : on s'en tient au sous-dossier.
   - --filesystem=xdg-music/Triat:create
   # L'import d'un cookies.txt passe par le portail de fichiers (une
   # autorisation ponctuelle, accordée fichier par fichier par l'utilisateur).
 
   # --- Veille -------------------------------------------------------------
-  - --talk-name=org.freedesktop.ScreenSaver   # inhiber la veille en lecture
+  # Volontairement absente : aucun code n'inhibe la veille aujourd'hui.
+  # Si on ajoute Gtk.Application.inhibit(SUSPEND) pendant la lecture, ce
+  # sont le portail Inhibit et ce droit-ci qu'il faudra déclarer :
+  #   - --talk-name=org.freedesktop.ScreenSaver
 
 # PERMISSIONS VOLONTAIREMENT ABSENTES — ne pas ajouter sans raison écrite :
 #   --filesystem=home           → accès aux profils navigateur et aux clés
@@ -67,11 +94,11 @@ cleanup:
   - '*.la'
 
 modules:
-  # --- libmpv, réduit à l'audio ------------------------------------------
+  # --- libmpv, sans lecteur ni scripts -------------------------------------
   # Le lecteur en ligne de commande, les scripts Lua et JavaScript, et le
   # crochet yt-dlp intégré sont désactivés : autant de code en moins exposé
   # à des flux distants. Triat pilote libmpv par son API et résout les URL
-  # lui-même.
+  # lui-même. La vidéo et le rendu OpenGL restent activés (Immersion).
   - name: libmpv
     buildsystem: meson
     config-opts:
@@ -102,23 +129,44 @@ modules:
             tag: v7.349.0
 
   # --- Dépendances Python -------------------------------------------------
-  # À générer avec flatpak-pip-generator pour figer les empreintes :
-  #   python3 flatpak-pip-generator --requirements-file=requirements.txt
-  # Ne jamais laisser pip télécharger à la construction : le dépôt doit
-  # être reproductible et vérifiable.
+  # TODO (bloquant pour publier) : `python3-requirements.json` n'existe pas
+  # encore dans le dépôt. Il se génère avec réseau, pas hors ligne :
+  #   packaging/flatpak/gen-requirements.sh
+  # (flatpak-pip-generator, à partir de requirements.lock). Ne jamais laisser
+  # pip télécharger à la construction : le dépôt doit être reproductible et
+  # vérifiable. PyGObject vient du runtime GNOME, pas de ce fichier.
   - python3-requirements.json
 
   # --- Triat ---------------------------------------------------------------
-  - name: rien
+  # Sources explicites : jamais `path: ../..` en bloc, qui embarquerait
+  # .venv, les APK, les captures et les données personnelles du dossier.
+  - name: triat
     buildsystem: simple
     build-commands:
       - install -Dm755 packaging/flatpak/triat.sh /app/bin/triat
       - mkdir -p /app/share/triat
-      - cp -r rien data /app/share/triat/
+      - cp -r triat data /app/share/triat/
+      - find /app/share/triat -name __pycache__ -prune -exec rm -rf {} +
       - install -Dm644 packaging/flatpak/org.triat.Triat.desktop
           /app/share/applications/org.triat.Triat.desktop
       - install -Dm644 packaging/flatpak/org.triat.Triat.metainfo.xml
           /app/share/metainfo/org.triat.Triat.metainfo.xml
+      - install -Dm644 data/icons/hicolor/scalable/apps/org.triat.Triat.svg
+          /app/share/icons/hicolor/scalable/apps/org.triat.Triat.svg
     sources:
       - type: dir
-        path: ../..
+        path: ../../triat
+        dest: triat
+        skip: [__pycache__]
+      - type: dir
+        path: ../../data
+        dest: data
+      - type: file
+        path: triat.sh
+        dest: packaging/flatpak
+      - type: file
+        path: org.triat.Triat.desktop
+        dest: packaging/flatpak
+      - type: file
+        path: org.triat.Triat.metainfo.xml
+        dest: packaging/flatpak
