@@ -1,0 +1,7 @@
+# Garde à jour les SHA épinglés des actions GitHub (ci.yml).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
