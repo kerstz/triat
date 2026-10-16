@@ -4,3 +4,16 @@ __pycache__/
 .pytest_cache/
 *.cookies.txt
 *.cookies.json
+.ruff_cache/
+.mypy_cache/
+# Binaires et secrets : jamais dans le dépôt (Releases GitHub pour les APK)
+*.apk
+*.aab
+*.jks
+*.keystore
+local.properties
+# Listes d'écoute personnelles
+youtube-mix-*.txt
+# Sortie de flatpak-builder
+/build/
+/.flatpak-builder/
