@@ -3,6 +3,32 @@ name = "triat"
 version = "0.1.0"
 description = "Lecteur de musique YouTube pour Linux (GTK4, libadwaita, libmpv)"
 requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+# Miroir de requirements.txt (versions exactes + empreintes : requirements.lock).
+# PyGObject (GTK4, libadwaita) et libmpv viennent de la distribution.
+dependencies = [
+    "python-mpv>=1.0.7",
+    "ytmusicapi>=1.12",
+    "yt-dlp[default]>=2026.8.19",
+    "keyring>=25",
+    "zeroconf>=0.140",
+    "cryptography>=42",
+    "qrcode>=7.4",
+]
+
+[project.scripts]
+# triat.__main__ aiguille vers l'interface ou vers la ligne de commande.
+triat = "triat.__main__:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["triat*"]
+# Installation prise en charge : packaging/nothing-os/install.sh ou Flatpak
+# (data/ — styles, icônes, polices — n'est pas embarqué dans la wheel).
 
 [tool.ruff]
 target-version = "py313"

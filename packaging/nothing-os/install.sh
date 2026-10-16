@@ -71,9 +71,13 @@ install_app() {
     "$venv/bin/pip" install -q --upgrade pip
     # Versions figées quand le verrou existe : deux installations donnent
     # alors exactement le même environnement.
-    local reqs="$ROOT/requirements.lock"
-    [ -f "$reqs" ] || reqs="$ROOT/requirements.txt"
-    "$venv/bin/pip" install -q -r "$reqs"
+    # Le verrou porte les sha256 de chaque paquet : --require-hashes refuse
+    # tout fichier qui ne correspond pas (dépôt PyPI compromis, miroir).
+    if [ -f "$ROOT/requirements.lock" ]; then
+        "$venv/bin/pip" install -q --require-hashes -r "$ROOT/requirements.lock"
+    else
+        "$venv/bin/pip" install -q -r "$ROOT/requirements.txt"
+    fi
 
     cat > "$PREFIX/bin/triat" <<LAUNCHER
 #!/bin/sh
