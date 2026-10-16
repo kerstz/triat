@@ -28,10 +28,17 @@ reqs="$ROOT/requirements.lock"
 [ -f "$reqs" ] || reqs="$ROOT/requirements.txt"
 
 # PyGObject vient du runtime GNOME : on ne le demande pas à pip.
+# Le verrou porte des empreintes et des marqueurs de plateforme : on ne
+# garde que les lignes « nom==version » qui concernent Linux/CPython
+# (flatpak-pip-generator recalcule les sha256 depuis PyPI).
 filtered="$(mktemp)"
 trap 'rm -f "$filtered"' EXIT
-grep -viE '^(pygobject|pycairo)([=<>~ ]|$)' "$reqs" > "$filtered"
+grep -E '^[A-Za-z]' "$reqs" \
+    | grep -viE '^(pygobject|pycairo)([=<>~ ]|$)' \
+    | grep -vE "sys_platform == 'win32'|implementation_name != 'cpython' *\\\\?$|^brotlicffi" \
+    | sed -E 's/ *;.*//; s/ *\\$//' > "$filtered"
 
+# Paquets natifs : voir le TODO du manifeste (--prefer-wheels avec le SDK).
 flatpak-pip-generator --runtime "$SDK" \
     --requirements-file "$filtered" \
     --output "$HERE/python3-requirements"

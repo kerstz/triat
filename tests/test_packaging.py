@@ -104,13 +104,42 @@ def test_flatpak_sources_are_explicit():
         assert base.exists(), source
 
 
-def test_flatpak_has_ffmpeg_extension_and_music_folder():
+def test_flatpak_codecs_and_music_folder():
     manifest = _manifest()
-    assert "org.freedesktop.Platform.ffmpeg-full" in manifest["add-extensions"]
+    # ffmpeg-full n'existe plus après 24.08 : codecs-extra vient du runtime.
+    assert "org.freedesktop.Platform.ffmpeg-full" not in manifest.get(
+        "add-extensions", {})
     assert any(arg.startswith("--filesystem=xdg-music")
                for arg in manifest["finish-args"])
     assert not any(arg.startswith("--filesystem=home")
                    for arg in manifest["finish-args"])
+
+
+def _git_sources(modules):
+    for module in modules:
+        if isinstance(module, dict):
+            for source in module.get("sources", []):
+                if source.get("type") == "git":
+                    yield source
+            yield from _git_sources(module.get("modules", []))
+
+
+def test_flatpak_git_sources_are_pinned_to_a_commit():
+    sources = list(_git_sources(_manifest()["modules"]))
+    assert sources
+    for source in sources:
+        assert re.fullmatch(r"[0-9a-f]{40}", source.get("commit", "")), source
+
+
+def test_flatpak_python_requirements_are_generated_and_hashed():
+    import json
+    manifest = _manifest()
+    assert "python3-requirements.json" in manifest["modules"]
+    data = json.loads((FLATPAK / "python3-requirements.json").read_text())
+    for module in data["modules"]:
+        for source in module["sources"]:
+            assert source["url"].startswith("https://files.pythonhosted.org/")
+            assert re.fullmatch(r"[0-9a-f]{64}", source["sha256"])
 
 
 def test_flatpak_requirements_generator_exists():

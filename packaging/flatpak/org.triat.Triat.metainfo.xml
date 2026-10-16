@@ -8,7 +8,7 @@
   <developer id="org.triat">
     <name>Les contributeurs de Triat</name>
   </developer>
-  <summary>Toute la musique de YouTube, sans publicité</summary>
+  <summary>Un lecteur de musique de bureau pour YouTube</summary>
 
   <description>
     <p>
@@ -19,12 +19,16 @@
     </p>
     <p>Fonctionnalités :</p>
     <ul>
-      <li>Lecture audio sans publicité</li>
+      <li>Lecture audio en arrière-plan, file d'attente et radio</li>
       <li>Saut automatique des sections non musicales (SponsorBlock)</li>
       <li>Bibliothèque, playlists et historique conservés localement</li>
       <li>Recommandations, avec ou sans compte Google</li>
       <li>Aucune télémétrie</li>
     </ul>
+    <p>
+      Projet indépendant, non affilié à Google LLC, YouTube ni YouTube Music.
+      Données SponsorBlock sous licence CC BY-NC-SA 4.0.
+    </p>
   </description>
 
   <launchable type="desktop-id">org.triat.Triat.desktop</launchable>

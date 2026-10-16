@@ -17,21 +17,14 @@ runtime-version: '51'
 sdk: org.gnome.Sdk
 command: triat
 
-# FFmpeg complet : le runtime GNOME n'embarque que ffmpeg-free, sans une
-# bonne partie des codecs (AAC, H.264) que sert YouTube. L'extension se
-# monte dans /app/lib/ffmpeg.
-# TODO : vérifier `version` contre le runtime-version choisi (l'extension
-# suit la version de org.freedesktop.Platform, pas celle de GNOME).
-add-extensions:
-  org.freedesktop.Platform.ffmpeg-full:
-    directory: lib/ffmpeg
-    version: '26.08'
-    add-ld-path: .
-    autodownload: true
-    autodelete: false
-
-cleanup-commands:
-  - mkdir -p ${FLATPAK_DEST}/lib/ffmpeg
+# Codecs : le runtime GNOME n'embarque que ffmpeg-free, sans une bonne
+# partie des codecs (AAC, H.264) que sert YouTube. Depuis la base
+# freedesktop 25.08, l'ancienne extension org.freedesktop.Platform.ffmpeg-full
+# n'est plus publiée (dernière branche : 24.08) : elle est remplacée par
+# org.freedesktop.Platform.codecs-extra, que le runtime GNOME 51 (base
+# freedesktop 26.08) déclare et télécharge lui-même (version 26.08-extra).
+# Rien à déclarer ici. Vérifié le 2026-10-16 avec
+#   flatpak remote-info --show-metadata flathub org.gnome.Platform//51
 
 finish-args:
   # --- Indispensable ------------------------------------------------------
@@ -113,9 +106,9 @@ modules:
       - type: git
         url: https://github.com/mpv-player/mpv.git
         tag: v0.41.0
-        # Renseigner le commit exact avant publication : un tag peut être
-        # déplacé, un commit non.
-        # commit: <à figer>
+        # Un tag peut être déplacé, un commit non : flatpak-builder refuse
+        # de construire si le tag ne pointe plus sur ce commit.
+        commit: 41f6a645068483470267271e1d09966ca3b9f413
     modules:
       - name: libplacebo
         buildsystem: meson
@@ -127,14 +120,18 @@ modules:
           - type: git
             url: https://code.videolan.org/videolan/libplacebo.git
             tag: v7.349.0
+            commit: 1fd3c7bde7b943fe8985c893310b5269a09b46c5
 
   # --- Dépendances Python -------------------------------------------------
-  # TODO (bloquant pour publier) : `python3-requirements.json` n'existe pas
-  # encore dans le dépôt. Il se génère avec réseau, pas hors ligne :
-  #   packaging/flatpak/gen-requirements.sh
-  # (flatpak-pip-generator, à partir de requirements.lock). Ne jamais laisser
-  # pip télécharger à la construction : le dépôt doit être reproductible et
-  # vérifiable. PyGObject vient du runtime GNOME, pas de ce fichier.
+  # Généré par packaging/flatpak/gen-requirements.sh (flatpak-pip-generator,
+  # à partir de requirements.lock) : URL PyPI et sha256 figés, pip ne
+  # télécharge rien à la construction. PyGObject vient du runtime GNOME.
+  # TODO (à vérifier avant publication) : cryptography, cffi, brotli,
+  # pycryptodomex et zeroconf sont pris en sdist. cryptography demande Rust
+  # (maturin) à la construction : régénérer avec
+  #   --prefer-wheels=cryptography,cffi,brotli,pycryptodomex,zeroconf
+  # (nécessite org.gnome.Sdk//51 installé), ou ajouter l'extension
+  # org.freedesktop.Sdk.Extension.rust-stable. Construction non testée ici.
   - python3-requirements.json
 
   # --- Triat ---------------------------------------------------------------
