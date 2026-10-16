@@ -4,7 +4,7 @@
 
 # Triat
 
-A little music player for Linux that plays music from YouTube, without ads.
+A little music player for Linux that plays music from YouTube.
 It skips the talking bits and intros with SponsorBlock, and it's made to sit
 nicely in a Hyprland setup (I use it with the
 [Nothing OS dotfiles](https://github.com/0xbbuddha/dotfiles_nothing_os)).
@@ -25,7 +25,8 @@ French.
 - Playlists, favourites, history, and a few automatic playlists
 - Import a `.txt` of YouTube links or an `.m3u`, export them back
 - Synced lyrics, a 10-band equaliser, SponsorBlock
-- Offline downloads, a mini player, and full screen with the video or a dot matrix
+- Downloads for offline listening (see the legal notice below), a mini player,
+  and full screen with the video or a dot matrix
 - Media keys and `playerctl` work (MPRIS)
 - Optional: use your browser cookies to get your own YouTube recommendations
 
@@ -102,6 +103,34 @@ python -m venv --system-site-packages .venv
   firewall is on, open TCP port 47823 and UDP port 5353 to your local
   network; `triat doctor` tells you what is blocked.
 
+## Legal notice
+
+Triat is an independent hobby project. It is **not affiliated with, endorsed
+by or sponsored by Google LLC, YouTube or YouTube Music**. YouTube is a
+trademark of Google LLC.
+
+Triat does not host or distribute any music. It plays what you choose to
+open from public services, and you are responsible for using it in line with
+those services' terms and with copyright law where you live. YouTube's Terms
+of Service do not allow downloading content unless YouTube offers a download
+option for it: only use the download feature for content you have the right
+to keep (your own uploads, freely licensed music, and so on). This notice is
+not legal advice.
+
+The screenshots show artwork and titles owned by their respective rights
+holders, for illustration only.
+
+## Credits
+
+- [SponsorBlock](https://sponsor.ajay.app): segment data is fetched at run
+  time from the SponsorBlock API and is licensed under
+  [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+  Triat does not redistribute it.
+- [LRCLIB](https://lrclib.net): synced lyrics.
+- [ListenBrainz](https://listenbrainz.org) (optional scrobbling).
+- Libraries and their licenses are listed in [NOTICE.md](NOTICE.md).
+
 ## License
 
 MIT. The fonts in `data/fonts` are under the SIL Open Font License.
+Third-party components keep their own licenses, see [NOTICE.md](NOTICE.md).
