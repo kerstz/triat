@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import types
 
@@ -133,7 +134,7 @@ def test_countdown_stops_when_the_server_closes_pairing(dialog, engine):
     engine.sync.cancel_pairing()
     assert dialog._tick_pairing() is False
     assert dialog._pairing_timer == 0
-    assert dialog.pairing_countdown.get_label() == "Appairage fermé : relancez-le"
+    assert dialog.pairing_countdown.get_label() == "Appairage fermé : relance-le"
 
 
 # ---- Confirmations ----------------------------------------------------------
@@ -147,7 +148,7 @@ def test_clearing_cookies_asks_first(dialog, engine, monkeypatch):
     dialog._on_clear_cookies_response(None, "cancel")
     assert not cleared
     dialog._on_clear_cookies_response(None, "clear")
-    assert cleared == [True]
+    assert spin(lambda: cleared == [True])
 
 
 def test_fill_durations_does_not_leak_its_handler(dialog, engine, monkeypatch):
@@ -192,6 +193,54 @@ def test_wipe_resets_the_sync_switch_and_devices(dialog, engine, monkeypatch):
     assert not dialog.copy_address_button.get_sensitive()
 
 
+@pytest.mark.parametrize("checked", [False, True])
+def test_wipe_passes_the_downloads_checkbox(dialog, engine, monkeypatch, checked):
+    calls = []
+    monkeypatch.setattr(engine, "wipe_user_data",
+                        lambda delete_downloads=False: calls.append(delete_downloads))
+    monkeypatch.setattr(dialog, "_after_cookie_change", lambda: None)
+    dialog._confirm_wipe(None)
+    assert not dialog._wipe_downloads.get_active(), "décochée par défaut"
+    dialog._wipe_downloads.set_active(checked)
+    dialog._on_wipe_response(None, "wipe")
+    assert calls == [checked]
+
+
+def test_keyring_calls_leave_the_gtk_thread(dialog, engine, monkeypatch):
+    seen = {}
+    main = threading.current_thread()
+
+    def record(name, result=None):
+        def fn(*_a, **_k):
+            seen[name] = threading.current_thread()
+            return result
+        return fn
+
+    status = types.SimpleNamespace(present=False)
+    monkeypatch.setattr(engine, "cookies", types.SimpleNamespace(
+        status=record("status", status), import_file=record("import"),
+        clear=record("clear")), raising=False)
+    monkeypatch.setattr(dialog, "_after_cookie_change", lambda: None)
+
+    dialog._refresh_status()
+    assert dialog.status_row.get_subtitle() == "Vérification…"
+    assert spin(lambda: dialog.status_row.get_subtitle()
+                == "Aucun cookie enregistré")
+
+    class _File:
+        def get_path(self):
+            return "/tmp/cookies.txt"
+
+    class _Chooser:
+        def open_finish(self, _result):
+            return _File()
+
+    dialog._on_cookie_file(_Chooser(), None)
+    dialog._on_clear_cookies_response(None, "clear")
+    assert spin(lambda: {"status", "import", "clear"} <= set(seen))
+    assert all(t is not main for t in seen.values())
+
+
 # ---- Recommandations écartées -----------------------------------------------
 
 def test_blocklist_row_lists_and_undoes(dialog, engine):
@@ -224,3 +273,97 @@ def _descendants(widget):
         while child is not None:
             stack.append(child)
             child = child.get_next_sibling()
+
+
+def test_format_device_status_marks_unfinished_pairings():
+    assert "inachevé" in sd.format_device_status({"confirmed": False})
+    assert sd.format_device_status({"last_sync": None}) == "Jamais synchronisé"
+    assert "à l'instant" in sd.format_device_status(
+        {"confirmed": True, "last_sync": time.time()})
+
+
+# ---- SoundCloud -------------------------------------------------------------
+
+def _fake_cache(tmp_path, monkeypatch, found_ago=3 * 3600):
+    import json
+    import time
+    cache = tmp_path / "cache"
+    (cache / "triat").mkdir(parents=True)
+    (cache / "triat" / "soundcloud.json").write_text(json.dumps(
+        {"client_id": "SECRETVALUE123", "found_at": time.time() - found_ago}))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+
+
+def test_soundcloud_is_off_by_default(dialog, engine):
+    assert not dialog.sc_switch.row.get_active()
+    assert not engine.settings.get("soundcloud_enabled")
+
+
+def test_soundcloud_dependents_follow_the_switch(dialog):
+    for widget in dialog._sc_dependents:
+        assert not widget.get_sensitive()
+    dialog.sc_switch.row.set_active(True)
+    dialog.sc_switch.alert.emit("response", "enable")
+    for widget in dialog._sc_dependents:
+        assert widget.get_sensitive()
+    dialog.sc_switch.row.set_active(False)
+    for widget in dialog._sc_dependents:
+        assert not widget.get_sensitive()
+
+
+def test_soundcloud_cancel_writes_nothing(dialog, engine):
+    dialog.sc_switch.row.set_active(True)
+    alert = dialog.sc_switch.alert
+    assert alert is not None
+    assert "n'autorise pas officiellement" in alert.get_body()
+    alert.emit("response", "cancel")
+    assert not dialog.sc_switch.row.get_active()
+    assert not engine.settings.get("soundcloud_enabled")
+    assert not engine.settings.get("soundcloud_tos_ack")
+
+
+def test_soundcloud_enable_sets_ack_then_skips_the_box(dialog, engine):
+    dialog.sc_switch.row.set_active(True)
+    dialog.sc_switch.alert.emit("response", "enable")
+    assert engine.settings.get("soundcloud_tos_ack") is True
+    assert engine.settings.get("soundcloud_enabled") is True
+    dialog.sc_switch.row.set_active(False)
+    assert not engine.settings.get("soundcloud_enabled")
+    dialog.sc_switch.row.set_active(True)
+    assert dialog.sc_switch.alert is None, "pas de seconde boîte après accord"
+    assert engine.settings.get("soundcloud_enabled") is True
+
+
+def test_soundcloud_purge_calls_the_library(dialog, engine, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine.library, "purge_source",
+                        lambda source: calls.append(source) or 4)
+    dialog._on_purge_response(None, "cancel")
+    assert calls == []
+    dialog._on_purge_response(None, "purge")
+    assert calls == ["soundcloud"]
+
+
+def test_soundcloud_status_shows_age_never_the_client_id(
+        window, engine, tmp_path, monkeypatch):              # noqa: F811
+    _fake_cache(tmp_path, monkeypatch)
+    monkeypatch.setattr(engine.sync, "_announce", lambda *_a: None)
+    other = SettingsDialog(engine)
+    subtitle = other.sc_client.get_subtitle()
+    assert "3 h" in subtitle
+    assert "SECRETVALUE123" not in subtitle
+
+
+def test_soundcloud_status_when_missing(dialog, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "vide"))
+    assert sd.format_client_id_status(sd.client_id_age()) == (
+        "Identifiant client : introuvable")
+
+
+# ---- Fondu à la pause -------------------------------------------------------
+
+def test_pause_fade_switch_calls_engine(dialog, engine, monkeypatch):   # noqa: F811
+    seen = []
+    monkeypatch.setattr(engine, "set_pause_fade", seen.append)
+    dialog.pause_fade_row.set_active(not dialog.pause_fade_row.get_active())
+    assert seen == [dialog.pause_fade_row.get_active()]

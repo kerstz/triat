@@ -12,7 +12,7 @@ import os
 import threading
 import time
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, GLib, GObject, Gtk
 
 from .artist_page import ArtistPage
 from .downloads_page import DownloadsPage
@@ -23,6 +23,7 @@ from .immersion import ImmersionView
 from .search_page import SearchPage
 from .settings_dialog import CATEGORY_LABELS, SettingsDialog
 from .track_actions import TrackActions
+from ..core.display import canonical_key
 from ..core.models import TrackRef
 from .track_grid import TrackGrid
 from .track_list import format_time
@@ -30,44 +31,45 @@ from .widgets.common import EmptyState, SectionTitle, accent_dot, label
 from .widgets.cover import Cover
 from .widgets.glyph import GlyphArt
 from ..core.home_feed import HomeFeed
-from ..core.mixes import SYNC_BUILD_LIMIT, MixStore, filter_blocked
+from ..core.mixes import MixStore, filter_blocked
 from ..core.reco import is_blocked
 from .widgets.dot_progress import DotProgressBar
 from .widgets.dot_volume import DotVolume
+from ..i18n import _, nformat
 
 
 # Triat affiche ses dates en français sans dépendre de la locale du système.
 JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi",
          "dimanche")
-MOIS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
-        "août", "septembre", "octobre", "novembre", "décembre")
+MOIS = ("janvier", _("février"), "mars", "avril", "mai", "juin", "juillet",
+        _("août"), "septembre", "octobre", "novembre", _("décembre"))
 
 # Saut des flèches gauche / droite, en secondes.
 SEEK_STEP = 5.0
 
 # Aide des raccourcis (Ctrl+?) : titre, accélérateur.
 SHORTCUTS = (
-    ("Lecture / pause", "space"),
-    ("Reculer de 5 s", "Left"),
-    ("Avancer de 5 s", "Right"),
-    ("Piste précédente", "<Shift>Left"),
-    ("Piste suivante", "<Shift>Right"),
-    ("Rechercher", "<Primary>f"),
-    ("Lecture en cours", "<Primary>l"),
-    ("Plein écran (Immersion)", "<Primary>i"),
-    ("Mini-lecteur", "<Primary>m"),
-    ("Réglages", "<Primary>comma"),
-    ("Fermer la vue ouverte", "Escape"),
-    ("Raccourcis clavier", "<Primary>question"),
-    ("Quitter", "<Primary>q"),
+    (_("Lecture / pause"), "space"),
+    (_("Reculer de 5 s"), "Left"),
+    (_("Avancer de 5 s"), "Right"),
+    (_("Piste précédente"), "<Shift>Left"),
+    (_("Piste suivante"), "<Shift>Right"),
+    (_("Rechercher"), "<Primary>f"),
+    (_("Lecture en cours"), "<Primary>l"),
+    (_("Plein écran (Immersion)"), "<Primary>i"),
+    (_("Mini-lecteur"), "<Primary>m"),
+    (_("Réglages"), "<Primary>comma"),
+    (_("Fermer la vue ouverte"), "Escape"),
+    (_("Raccourcis clavier"), "<Primary>question"),
+    (_("Quitter"), "<Primary>q"),
 )
 
 # « Radio » n'est plus une page : c'est une action (tuile de l'accueil).
 NAV_ITEMS = (
-    ("home", "Accueil", "triat-home-symbolic"),
-    ("search", "Recherche", "triat-search-symbolic"),
-    ("library", "Bibliothèque", "triat-library-symbolic"),
-    ("downloads", "Hors-ligne", "triat-downloads-symbolic"),
+    ("home", _("Accueil"), "triat-home-symbolic"),
+    ("search", _("Recherche"), "triat-search-symbolic"),
+    ("library", _("Bibliothèque"), "triat-library-symbolic"),
+    ("downloads", _("Hors-ligne"), "triat-downloads-symbolic"),
 )
 
 
@@ -105,16 +107,17 @@ def overline(text: str) -> Gtk.Label:
 def greeting(now: datetime.datetime | None = None) -> str:
     hour = (now or datetime.datetime.now()).hour
     if hour < 12:
-        return "Bonjour"
+        return _("Bonjour")
     if hour < 18:
-        return "Bon après-midi"
-    return "Bonsoir"
+        return _("Bon après-midi")
+    return _("Bonsoir")
 
 
 def date_line(now: datetime.datetime | None = None) -> str:
     today = now or datetime.datetime.now()
     day = JOURS[today.weekday()]
-    return f"{day.capitalize()} {today.day} {MOIS[today.month - 1]}"
+    return _("{day} {number} {month}").format(
+        day=day.capitalize(), number=today.day, month=MOIS[today.month - 1])
 
 
 class Sidebar(Gtk.Box):
@@ -135,6 +138,7 @@ class Sidebar(Gtk.Box):
         self._on_navigate = on_navigate
         self._buttons: dict[str, Gtk.Button] = {}
         self._labels: list[Gtk.Widget] = []
+        self._nav_contents: list[Gtk.Widget] = []
         self.compact = False
         self.set_size_request(self.WIDE, -1)
 
@@ -143,7 +147,7 @@ class Sidebar(Gtk.Box):
         self.wordmark.set_margin_start(12)
         self.wordmark.set_margin_top(4)
         self.wordmark.set_margin_bottom(22)
-        self._logo = label("triat", "triat-display", "nav")
+        self._logo = label(_("triat"), "triat-display", "nav")
         self.wordmark.append(self._logo)
         # En rail, le mot ne tient pas : le triangle en points de l'icône.
         self._mark = Gtk.Image.new_from_icon_name("triat-logo-symbolic")
@@ -166,7 +170,7 @@ class Sidebar(Gtk.Box):
 
         self._playlists = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         self._playlists.set_margin_top(22)
-        heading = label("Playlists", "triat-side-heading")
+        heading = label(_("Playlists"), "triat-side-heading")
         heading.set_margin_start(12)
         heading.set_margin_bottom(6)
         self._playlists.append(heading)
@@ -179,7 +183,7 @@ class Sidebar(Gtk.Box):
         spacer = Gtk.Box(vexpand=True)
         self.append(spacer)
         self.settings_button = self._nav_button(
-            "settings", "Réglages", "triat-settings-symbolic",
+            "settings", _("Réglages"), "triat-settings-symbolic",
             lambda *_: self._on_settings())
         self.append(self.settings_button)
         self._data_path = ""
@@ -196,6 +200,10 @@ class Sidebar(Gtk.Box):
         self.set_size_request(self.COMPACT if compact else self.WIDE, -1)
         for widget in self._labels:
             widget.set_visible(not compact)
+        # Rail : l'icône seule se centre dans le cercle actif, sinon elle
+        # reste collée à gauche du bouton de 40 px.
+        for content in self._nav_contents:
+            content.set_halign(Gtk.Align.CENTER if compact else Gtk.Align.FILL)
         self._logo.set_visible(not compact)
         self._mark.set_visible(compact)
         self.wordmark.set_halign(Gtk.Align.CENTER if compact else Gtk.Align.FILL)
@@ -211,7 +219,7 @@ class Sidebar(Gtk.Box):
         home = GLib.get_home_dir()
         shown = "~" + path[len(home):] if path.startswith(home) else path
         self._data_path = shown
-        self.settings_button.set_tooltip_text(f"Réglages\nDonnées : {shown}")
+        self.settings_button.set_tooltip_text(_("Réglages\nDonnées : {shown}").format(shown=shown))
 
     def set_live(self, playing: bool) -> None:
         self.live.set_opacity(1.0 if playing else 0.0)
@@ -241,6 +249,7 @@ class Sidebar(Gtk.Box):
         name = label(text)
         content.append(name)
         self._labels.append(name)
+        self._nav_contents.append(content)
 
         button = Gtk.Button(child=content)
         button.add_css_class("triat-nav-item")
@@ -256,6 +265,24 @@ class Sidebar(Gtk.Box):
             else:
                 button.remove_css_class("active")
             button.update_state([Gtk.AccessibleState.SELECTED], [int(name == key)])
+
+
+RECENT_SHOWN = 18
+
+
+def dedupe_recent(tracks, limit: int = RECENT_SHOWN) -> list:
+    """« Écouter à nouveau » : une seule fois par titre affiché (versions
+    « Official Video », « Lyrics »… regroupées), dans l'ordre d'écoute."""
+    seen, kept = set(), []
+    for ref in tracks:
+        key = canonical_key(ref.title, ref.artist)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(ref)
+        if len(kept) >= limit:
+            break
+    return kept
 
 
 class ResumeCard(Gtk.Box):
@@ -285,14 +312,14 @@ class ResumeCard(Gtk.Box):
                                    max_children_per_line=3)
         self.actions.set_halign(Gtk.Align.START)
         self.actions.set_margin_top(12)
-        self.primary = Gtk.Button(label="Reprendre")
+        self.primary = Gtk.Button(label=_("Reprendre"))
         self.primary.add_css_class("suggested-action")
-        self.radio = Gtk.Button(label="Ma radio")
+        self.radio = Gtk.Button(label=_("Ma radio"))
         self.radio.add_css_class("pill")
-        self.radio.set_tooltip_text("Enchaîne sur ce que vous écoutez")
-        self.fullscreen = Gtk.Button(label="Plein écran")
+        self.radio.set_tooltip_text(_("Enchaîne sur ce que tu écoutes"))
+        self.fullscreen = Gtk.Button(label=_("Plein écran"))
         self.fullscreen.add_css_class("pill")
-        self.fullscreen.set_tooltip_text("Le clip, ou la matrice de points (Ctrl+I)")
+        self.fullscreen.set_tooltip_text(_("Le clip, ou la matrice de points (Ctrl+I)"))
         for button in (self.primary, self.radio, self.fullscreen):
             self.actions.append(button)
         words.append(self.actions)
@@ -303,20 +330,21 @@ class ResumeCard(Gtk.Box):
         self.ref = ref
         if ref is None:
             self.art.set_seed(7)
-            self.kicker.set_text("Rien n'a encore été écouté")
-            self.title.set_text("Cherchez un titre pour commencer")
-            self.artist.set_text("Ou importez une playlist depuis la Bibliothèque.")
-            self.primary.set_label("Rechercher")
+            self.kicker.set_text(_("Rien n'a encore été écouté"))
+            self.title.set_text(_("Cherche un titre pour commencer"))
+            self.artist.set_text(_("Ou importe une playlist depuis la Bibliothèque."))
+            self.primary.set_label(_("Rechercher"))
             self.radio.set_visible(False)
             self.fullscreen.set_visible(False)
             return
         self.art.set_track(ref)
-        self.kicker.set_text("En lecture" if playing and is_current
-                             else "Reprendre")
-        self.title.set_text(ref.title)
-        self.artist.set_text(ref.artist or "")
-        self.primary.set_label("Pause" if playing and is_current
-                               else "Reprendre")
+        self.kicker.set_text(_("En lecture") if playing and is_current
+                             else _("Reprendre"))
+        self.title.set_text(ref.display_title)
+        self.title.set_tooltip_text(ref.title)
+        self.artist.set_text(ref.display_artist or "")
+        self.primary.set_label(_("Pause") if playing and is_current
+                               else _("Reprendre"))
         self.radio.set_visible(True)
         self.fullscreen.set_visible(True)
 
@@ -344,10 +372,10 @@ class MixCard(Gtk.Button):
         self.set_child(box)
         # « Parce que… » : la raison d'abord, puis le détail.
         reason = getattr(mix, "reason", "")
-        self.set_tooltip_text(f"{reason}\n{mix.subtitle}" if reason
+        self.set_tooltip_text(_("{reason}\n{subtitle}").format(reason=reason, subtitle=mix.subtitle) if reason
                               else mix.subtitle)
         self.update_property([Gtk.AccessibleProperty.LABEL],
-                             [f"{mix.title}, {mix.subtitle}"])
+                             [_("{title}, {subtitle}").format(title=mix.title, subtitle=mix.subtitle)])
 
 
 class HomePage(Gtk.Box):
@@ -374,6 +402,7 @@ class HomePage(Gtk.Box):
         self._build_dirty = False    # un refresh est arrivé pendant ce temps
         self._fetching = False       # requête distante en cours
         self._has_recent = False
+        self._refresh_seq = 0        # jeton : un résultat périmé est ignoré
 
         scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -394,9 +423,12 @@ class HomePage(Gtk.Box):
             # Synchro avec le téléphone, métadonnées complétées : l'accueil
             # se remet à jour s'il est à l'écran (sinon à la prochaine visite).
             engine.connect("library-changed", lambda *_: self._on_library_changed())
+            # Signal absent d'un moteur factice : on s'en passe.
+            if GObject.signal_lookup("data-wiped", type(engine)):
+                engine.connect("data-wiped", lambda *_: self._on_data_wiped())
 
         # --- Mixes ---
-        self.mixes_section = SectionTitle("Mixes pour vous")
+        self.mixes_section = SectionTitle(_("Mixes pour toi"))
         column.append(self.mixes_section)
         self.mix_box = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
                                    homogeneous=True, column_spacing=4,
@@ -407,7 +439,7 @@ class HomePage(Gtk.Box):
         column.append(self.mix_box)
 
         # --- Suggestions distantes (cache, puis réseau en arrière-plan) ---
-        self.remote_title = SectionTitle("Suggestions")
+        self.remote_title = SectionTitle(_("Suggestions"))
         self.remote_note = label("", "triat-dim", wrap=True)
         self.remote_grid = TrackGrid(cover_size=120)
         self.remote_grid.connect("item-activated", self._play_remote)
@@ -417,27 +449,27 @@ class HomePage(Gtk.Box):
             column.append(widget)
 
         # --- Écouter à nouveau ---
-        self.recent_title = SectionTitle("Écouter à nouveau")
+        self.recent_title = SectionTitle(_("Écouter à nouveau"))
         column.append(self.recent_title)
         self.recent_grid = TrackGrid(cover_size=120)
         self.recent_grid.connect("item-activated", self._play_recent)
         self.recent_grid.set_margin_bottom(18)
         self.recent_empty = EmptyState(
-            "Rien pour l'instant",
-            "Votre historique d'écoute apparaîtra ici. Il reste sur cet "
-            "ordinateur.")
+            _("Rien pour l'instant"),
+            _("Ton historique d'écoute apparaîtra ici. Il reste sur cet "
+            "ordinateur."))
         column.append(self.recent_grid)
         column.append(self.recent_empty)
 
         # --- Playlists ---
-        self.mixes_title = SectionTitle("Vos playlists")
+        self.mixes_title = SectionTitle(_("Tes playlists"))
         column.append(self.mixes_title)
         self.mixes_grid = TrackGrid(cover_size=120)
         self.mixes_grid.connect("item-activated", self._play_mix)
         self.mixes_empty = EmptyState(
-            "Aucune playlist",
-            "Importez un fichier de liens YouTube depuis la Bibliothèque "
-            "pour créer votre première playlist.")
+            _("Aucune playlist"),
+            _("Importe un fichier de liens YouTube depuis la Bibliothèque "
+            "pour créer ta première playlist."))
         column.append(self.mixes_grid)
         column.append(self.mixes_empty)
 
@@ -450,6 +482,14 @@ class HomePage(Gtk.Box):
     def _on_library_changed(self) -> None:
         if self.get_mapped():
             self.refresh()
+
+    def _on_data_wiped(self) -> None:
+        """Données effacées : caches d'accueil et mixes figés jetés."""
+        if self._feed is not None:
+            self._feed.reset()
+        if self._store is not None:
+            self._store.reset()
+        self.refresh()
 
     def set_narrow(self, narrow: bool) -> None:
         self.resume.art.set_size_request(112 if narrow else 148,
@@ -474,19 +514,61 @@ class HomePage(Gtk.Box):
     def refresh(self) -> None:
         """Recharge toutes les sections depuis la bibliothèque.
 
-        Local d'abord et tout de suite ; les mixes d'une grosse bibliothèque
-        et les suggestions distantes arrivent ensuite, sans bloquer."""
+        Les requêtes lourdes (historique, pochettes de playlists, mixes) ne
+        passent jamais par le fil GTK : un fil les calcule, le résultat est
+        appliqué via idle_add, et ignoré s'il est périmé."""
         self._show_resume()
         if self._engine is None:
             self.recent_grid.set_visible(False)
             self.mixes_grid.set_visible(False)
             self.mixes_section.set_visible(False)
             return
+        self._refresh_seq += 1
+        if self._building:
+            # Un calcul est en vol : il sera relancé à son retour.
+            self._build_dirty = True
+            return
+        self._building = True
+        seq = self._refresh_seq
+        library, store = self._engine.library, self._store
+        today = datetime.date.today()
+
+        def worker() -> None:
+            try:
+                data = self._collect(library, store, today)
+            except Exception:
+                data = None
+            GLib.idle_add(self._refresh_done, seq, data)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def _collect(library, store, today) -> dict:
+        recent = dedupe_recent(library.recent(limit=60), RECENT_SHOWN)
+        covers = list(library.playlist_covers())
+        mixes = None
+        if store is not None:
+            try:
+                mixes = store.get_or_build(today, time.time())
+            except Exception:
+                mixes = None
+        return {"recent": recent, "covers": covers, "mixes": mixes}
+
+    def _refresh_done(self, seq: int, data) -> bool:
+        self._building = False
+        if self._build_dirty or seq != self._refresh_seq:
+            self._build_dirty = False
+            self.refresh()
+            return GLib.SOURCE_REMOVE
+        if data is not None and self._engine is not None:
+            self._apply(data)
+        return GLib.SOURCE_REMOVE
+
+    def _apply(self, data: dict) -> None:
         library = self._engine.library
-
-        self._refresh_mixes(library)
-
-        recent = library.recent(limit=18)
+        if data["mixes"] is not None:
+            self._render_mixes(data["mixes"])
+        recent = data["recent"]
         self.recent_grid.set_items(recent)
         self.recent_grid.set_visible(bool(recent))
         self._has_recent = bool(recent)
@@ -495,13 +577,14 @@ class HomePage(Gtk.Box):
         # Chaque playlist est représentée par la pochette de sa première
         # piste : c'est ce que l'utilisateur reconnaît. Une seule requête.
         covers, badges, self._playlist_ids = [], {}, []
-        for item in library.playlist_covers():
+        for item in data["covers"]:
             if not item["first_id"] or not item["item_count"]:
                 continue
             cover = TrackRef(video_id=item["first_id"], title=item["name"],
                              artist="", thumbnail=item["first_thumbnail"])
             covers.append(cover)
-            badges[cover.video_id] = f"{item['item_count']} titres"
+            badges[cover.video_id] = nformat(
+                "{n} titre", "{n} titres", item["item_count"])
             self._playlist_ids.append(item["id"])
 
         self.mixes_grid.set_items(covers, badges)
@@ -516,44 +599,6 @@ class HomePage(Gtk.Box):
         self.recent_empty.set_visible(not self._has_recent and not self.mixes)
 
     # ---- Mixes -------------------------------------------------------------
-
-    def _refresh_mixes(self, library) -> None:
-        today = datetime.date.today()
-        cached = self._store.load(today)
-        if cached is not None:
-            self._render_mixes(cached)
-        elif library.count_owned() <= SYNC_BUILD_LIMIT:
-            self._render_mixes(self._store.get_or_build(today, time.time()))
-        else:
-            # Grosse bibliothèque : on garde les vignettes affichées et on
-            # construit hors du fil GTK.
-            self._start_mix_build(today)
-
-    def _start_mix_build(self, today) -> None:
-        if self._building:
-            self._build_dirty = True
-            return
-        self._building = True
-        store = self._store
-
-        def worker() -> None:
-            try:
-                mixes = store.get_or_build(today, time.time())
-            except Exception:
-                mixes = None
-            GLib.idle_add(self._mixes_built, mixes)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _mixes_built(self, mixes) -> bool:
-        self._building = False
-        if mixes is not None:
-            self._render_mixes(mixes)
-            self._update_empty_states()
-        if self._build_dirty:
-            self._build_dirty = False
-            self.refresh()
-        return GLib.SOURCE_REMOVE
 
     def _render_mixes(self, mixes) -> None:
         # Le filtre est appliqué à l'affichage : écarter un titre ne demande
@@ -610,20 +655,20 @@ class HomePage(Gtk.Box):
                 tracks = [t for t in section["tracks"]
                           if not is_blocked(t, blocked)][:18]
                 if tracks:
-                    title = section.get("title") or "Suggestions"
+                    title = section.get("title") or _("Suggestions")
                     break
         shown = bool(tracks)
         if shown:
             self.remote_title.title.set_text(title)
             self.remote_grid.set_items(tracks)
-            note = ("Selon votre compte YouTube Music"
+            note = (_("Selon ton compte YouTube Music")
                     if snapshot.source == "ytmusic"
-                    else "Suggestions YouTube, sans compte")
+                    else _("Suggestions YouTube, sans compte"))
             if snapshot.stale:
                 age = max(0.0, time.time() - snapshot.fetched_at)
-                ago = (f"{int(age // 3600)} h" if age < 48 * 3600
-                       else f"{int(age // 86400)} j")
-                note += f" · hors ligne, mis à jour il y a {ago}"
+                ago = (_("{n} h").format(n=int(age // 3600)) if age < 48 * 3600
+                       else _("{n} j").format(n=int(age // 86400)))
+                note += _(" · hors ligne, mis à jour il y a {ago}").format(ago=ago)
             self.remote_note.set_text(note)
         for widget in (self.remote_title, self.remote_note, self.remote_grid):
             widget.set_visible(shown)
@@ -698,9 +743,9 @@ class PlayerBar(Gtk.Box):
         self.cover.set_valign(Gtk.Align.CENTER)
         titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1,
                          valign=Gtk.Align.CENTER)
-        self._title = label("Rien en lecture", "now-title", ellipsize=3,
+        self._title = label(_("Rien en lecture"), "now-title", ellipsize=3,
                             max_width_chars=30)
-        self._artist = label("Choisissez une piste", "now-artist", ellipsize=3,
+        self._artist = label(_("Choisis une piste"), "now-artist", ellipsize=3,
                              max_width_chars=30)
         titles.append(self._title)
         titles.append(self._artist)
@@ -713,14 +758,14 @@ class PlayerBar(Gtk.Box):
         self.expand_button = Gtk.Button(child=content, valign=Gtk.Align.CENTER)
         self.expand_button.add_css_class("flat")
         self.expand_button.add_css_class("triat-expand")
-        self.expand_button.set_tooltip_text("Lecture en cours (Ctrl+L)")
+        self.expand_button.set_tooltip_text(_("Lecture en cours (Ctrl+L)"))
         self.expand_button.update_property(
-            [Gtk.AccessibleProperty.LABEL], ["Ouvrir Lecture en cours"])
+            [Gtk.AccessibleProperty.LABEL], [_("Ouvrir Lecture en cours")])
         # Chargement : le moteur met 1 à 3 s à démarrer une piste.
         self.spinner = Gtk.Spinner(valign=Gtk.Align.CENTER)
         self.spinner.set_visible(False)
         self.spinner.update_property(
-            [Gtk.AccessibleProperty.LABEL], ["Chargement"])
+            [Gtk.AccessibleProperty.LABEL], [_("Chargement")])
         left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
                        valign=Gtk.Align.CENTER)
         left.append(self.expand_button)
@@ -732,10 +777,10 @@ class PlayerBar(Gtk.Box):
         # --- centre : transport ---
         transport = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4,
                             halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
-        self.prev_button = self._icon_button("triat-previous-symbolic", "Précédent")
-        self.play_button = self._icon_button("triat-play-symbolic", "Lecture",
+        self.prev_button = self._icon_button("triat-previous-symbolic", _("Précédent"))
+        self.play_button = self._icon_button("triat-play-symbolic", _("Lecture"),
                                              primary=True)
-        self.next_button = self._icon_button("triat-next-symbolic", "Suivant")
+        self.next_button = self._icon_button("triat-next-symbolic", _("Suivant"))
         for button in (self.prev_button, self.play_button, self.next_button):
             transport.append(button)
         self.centre = transport
@@ -761,9 +806,9 @@ class PlayerBar(Gtk.Box):
         self.fullscreen_button = Gtk.Button(icon_name="triat-fullscreen-symbolic")
         self.fullscreen_button.add_css_class("flat")
         self.fullscreen_button.add_css_class("circular")
-        self.fullscreen_button.set_tooltip_text("Plein écran (Ctrl+I)")
+        self.fullscreen_button.set_tooltip_text(_("Plein écran (Ctrl+I)"))
         self.fullscreen_button.update_property(
-            [Gtk.AccessibleProperty.LABEL], ["Plein écran"])
+            [Gtk.AccessibleProperty.LABEL], [_("Plein écran")])
         right.append(self.fullscreen_button)
         row.set_end_widget(right)
         self.right = right
@@ -812,15 +857,16 @@ class PlayerBar(Gtk.Box):
 
     def _on_track(self, _engine, ref) -> None:
         if ref is None:
-            self._title.set_text("Rien en lecture")
-            self._artist.set_text("Choisissez une piste")
+            self._title.set_text(_("Rien en lecture"))
+            self._artist.set_text(_("Choisis une piste"))
             self.cover.clear()
             self.progress.clear()
             self._elapsed.set_text("0:00")
             self._total.set_text("0:00")
             return
-        self._title.set_text(ref.title)
-        self._artist.set_text(ref.artist or "—")
+        self._title.set_text(ref.display_title)
+        self._title.set_tooltip_text(ref.title)
+        self._artist.set_text(ref.display_artist or "—")
         self.cover.set_track(ref)
         self.progress.props.position = 0.0
         self.progress.props.duration = ref.duration or 0.0
@@ -833,7 +879,7 @@ class PlayerBar(Gtk.Box):
             "triat-pause-symbolic" if playing
             else "triat-play-symbolic")
         self.play_button.set_sensitive(state != "idle")
-        name = "Pause" if playing else "Lecture"
+        name = _("Pause") if playing else _("Lecture")
         self.play_button.set_tooltip_text(name)
         self.play_button.update_property([Gtk.AccessibleProperty.LABEL], [name])
         self._loading = state == "loading"
@@ -1049,7 +1095,7 @@ class TriatWindow(Adw.ApplicationWindow):
             if self.library is not None:
                 self.library.refresh()
             if key in ("cookie_source", "wiped"):
-                self._toast("Réglages appliqués")
+                self._toast(_("Réglages appliqués"))
 
     # ---- Vue plein écran -------------------------------------------------
 
@@ -1069,7 +1115,7 @@ class TriatWindow(Adw.ApplicationWindow):
         if self.immersion is None or self.immersion.active:
             return
         if self.engine.current is None:
-            self._toast("Rien en lecture")
+            self._toast(_("Rien en lecture"))
             return
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.stack.set_transition_duration(320)
@@ -1114,7 +1160,8 @@ class TriatWindow(Adw.ApplicationWindow):
                        lambda _e, state: self.sidebar.set_live(state == "playing"))
         self.sidebar.set_live(False)
         engine.connect("error", self._on_error)
-        engine.connect("track-changed", self._on_track_segments)
+        if GObject.signal_lookup("segments-changed", type(engine)):
+            engine.connect("segments-changed", self._on_segments_changed)
         engine.connect("track-changed", self._on_track_marks)
         engine.connect("segment-skipped", self._on_segment_skipped)
         engine.connect("segment-pending", self._on_segment_pending)
@@ -1126,10 +1173,9 @@ class TriatWindow(Adw.ApplicationWindow):
         if self.library is not None:
             self.library._mark_current()
 
-    def _on_track_segments(self, engine, _ref) -> None:
+    def _on_segments_changed(self, _engine, segments) -> None:
         """Reporte les segments connus sur les deux barres de progression."""
-        planner = getattr(engine, "_planner", None)
-        segments = planner.segments if planner is not None else []
+        segments = segments or []
         self.player_bar.set_segments(segments)
         if self.now_playing is not None:
             self.now_playing.set_segments(segments)
@@ -1143,16 +1189,16 @@ class TriatWindow(Adw.ApplicationWindow):
     def _on_segment_skipped(self, _engine, segment, gained: float) -> None:
         # Toast SponsorBlock avec possibilité d'annuler (DESIGN.md §6).
         libelle = category_label(segment.category)
-        toast = make_toast(f"{libelle} sauté · {format_time(gained)}")
-        toast.set_button_label("Annuler")
+        toast = make_toast(_("{libelle} sauté · {format_time}").format(libelle=libelle, format_time=format_time(gained)))
+        toast.set_button_label(_("Annuler"))
         toast.connect("button-clicked",
                       lambda *_: self.engine.cancel_segment(segment))
         self.toasts.add_toast(toast)
 
     def _on_segment_pending(self, _engine, segment) -> None:
         toast = make_toast(
-            f"{category_label(segment.category)} détecté", timeout=6)
-        toast.set_button_label("Sauter")
+            _("{category_label} détecté").format(category_label=category_label(segment.category)), timeout=6)
+        toast.set_button_label(_("Sauter"))
         toast.connect("button-clicked",
                       lambda *_: self.engine.skip_segment(segment))
         self.toasts.add_toast(toast)
@@ -1177,7 +1223,7 @@ class TriatWindow(Adw.ApplicationWindow):
     def show_artist(self, artist: str) -> None:
         """Ouvre la page d'un artiste."""
         if self.artist is None or not (artist or "").strip():
-            self._toast("Artiste inconnu pour cette piste")
+            self._toast(_("Artiste inconnu pour cette piste"))
             return
         self.artist.show_artist(artist)
         self.sidebar.select("library")
@@ -1325,7 +1371,7 @@ class TriatWindow(Adw.ApplicationWindow):
         """Fenêtre d'aide des raccourcis (Ctrl+?)."""
         if getattr(Adw, "ShortcutsDialog", None) is not None:
             dialog = Adw.ShortcutsDialog()
-            section = Adw.ShortcutsSection(title="Triat")
+            section = Adw.ShortcutsSection(title=_("Triat"))
             for title, accel in SHORTCUTS:
                 section.add(Adw.ShortcutsItem.new(title, accel))
             dialog.add(section)
@@ -1333,8 +1379,8 @@ class TriatWindow(Adw.ApplicationWindow):
             return
         win = Gtk.ShortcutsWindow(modal=True, transient_for=self)
         section = Gtk.ShortcutsSection(section_name="shortcuts",
-                                       title="Raccourcis")
-        group = Gtk.ShortcutsGroup(title="Triat")
+                                       title=_("Raccourcis"))
+        group = Gtk.ShortcutsGroup(title=_("Triat"))
         for title, accel in SHORTCUTS:
             group.add_shortcut(Gtk.ShortcutsShortcut(title=title,
                                                      accelerator=accel))

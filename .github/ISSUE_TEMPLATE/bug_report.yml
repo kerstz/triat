@@ -1,0 +1,76 @@
+name: Bug report
+description: Something does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If playback suddenly stopped working, update yt-dlp first:
+        `~/.local/lib/triat/venv/bin/pip install -U yt-dlp`
+
+        **Do not paste cookies, tokens or the content of `cookies.txt`.** For a security problem, do not open an issue: use the private report described in the security policy.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+    validations:
+      required: false
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `triat doctor`
+      description: Run `triat doctor` in a terminal and paste the result.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Linux distribution and desktop
+      placeholder: Arch Linux, Hyprland
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed Triat
+      options:
+        - Install script (packaging/nothing-os/install.sh)
+        - Flatpak, built locally
+        - Run from the source (./run.sh)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Triat version or commit
+      placeholder: 0.1.0, or a commit hash
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Check that nothing private is visible before you paste.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send
+      options:
+        - label: I searched the existing issues
+          required: true
+        - label: I did not paste cookies or tokens
+          required: true

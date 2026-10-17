@@ -19,6 +19,12 @@ log = logging.getLogger(__name__)
 
 NORMALISE_FILTER = "dynaudnorm=g=5:f=250:r=0.9:p=0.5"
 
+# Fondu court à la pause et à la reprise (pas de crossfade entre pistes).
+PAUSE_FADE_SECONDS = 0.2
+PAUSE_FADE_STEPS = 10
+# Sous ce volume mpv, un fondu n'aurait rien à adoucir (ex. fin de minuterie).
+FADE_MIN_VOLUME = 1.0
+
 
 class Player(GObject.Object):
     """Lecteur audio. L'UI ne parle qu'à cet objet, jamais à mpv."""
@@ -45,6 +51,14 @@ class Player(GObject.Object):
         self._seeking = False
         self._normalise = False
         self._eq_filter = ""
+        self._gain_filter = ""
+        # Volume voulu par l'utilisateur (0-100) ; mpv peut s'en écarter
+        # pendant un fondu.
+        self._volume = 100.0
+        # Fondu de pause/reprise (réglage « pause_fade », posé par l'Engine).
+        self.pause_fade = True
+        self._fade_id = 0
+        self._fade_dir = ""             # "out" (vers la pause) | "in"
         # Clip demandé : (video_id, url). Greffé dès que le fichier est chargé.
         self._video: tuple[str, str] | None = None
         self._video_attached = False
@@ -55,6 +69,10 @@ class Player(GObject.Object):
         # remplacé depuis sont jetés (sinon la position ou la fin de
         # l'ancienne piste serait créditée à la nouvelle).
         self._gen = 0
+        # Entrée de playlist mpv du fichier en cours (événement `start-file`).
+        # `None` entre l'ordre de lecture et ce `start-file` : tout `end-file`
+        # reçu alors concerne l'ancien fichier et est ignoré.
+        self._entry_id: int | None = None
 
         self._mpv = mpv.MPV(
             # Pas de vidéo par défaut. Le clip de l'écran Immersion est greffé
@@ -87,8 +105,14 @@ class Player(GObject.Object):
         def _on_file_loaded(_event) -> None:
             GLib.idle_add(self._on_loaded, self._gen)
 
+        @self._mpv.event_callback("start-file")
+        def _on_start_file(event) -> None:
+            self._entry_id = getattr(event.data, "playlist_entry_id", None)
+
         @self._mpv.event_callback("end-file")
         def _on_end_file(event) -> None:
+            if not self._entry_matches(event):
+                return
             reason = getattr(event.data, "reason", None)
             reason = getattr(reason, "value", reason)
             gen = self._gen
@@ -96,6 +120,13 @@ class Player(GObject.Object):
                 GLib.idle_add(self._emit_eof, gen)
             elif reason in ("error", 4):
                 GLib.idle_add(self._emit_error, "Échec de lecture du flux", gen)
+
+    def _entry_matches(self, event) -> bool:
+        """Vrai si `end-file` concerne le fichier chargé en dernier."""
+        entry = getattr(getattr(event, "data", None), "playlist_entry_id", None)
+        if entry is None:
+            return True                 # version de mpv sans identifiant
+        return self._entry_id is not None and entry == self._entry_id
 
     # ---- API publique -------------------------------------------------
 
@@ -119,6 +150,7 @@ class Player(GObject.Object):
     def play_track(self, track: Track, start: float = 0.0) -> None:
         """Lit la piste ; `start` reprend à cette position (flux ré-résolu)."""
         self._gen += 1
+        self._entry_id = None
         self._track = track
         self._duration = track.duration
         self._position = max(0.0, start)
@@ -200,17 +232,6 @@ class Player(GObject.Object):
         self.emit("video-error", message)
         return GLib.SOURCE_REMOVE
 
-    def video_info(self) -> dict:
-        """Dimensions et codec réellement décodés, pour la pilule de format."""
-        try:
-            params = self._mpv.video_params or {}
-            return {"width": params.get("w") or 0,
-                    "height": params.get("h") or 0,
-                    "codec": self._mpv.video_format or "",
-                    "hwdec": self._mpv.hwdec_current or ""}
-        except Exception:
-            return {}
-
     def create_render_context(self, get_proc_address):
         """Contexte OpenGL de mpv. À appeler avec le contexte GL courant."""
         self._render = mpv.MpvRenderContext(
@@ -232,10 +253,57 @@ class Player(GObject.Object):
     def toggle_pause(self) -> None:
         if self._state == "idle":
             return
-        self._mpv.pause = not self._mpv.pause
+        if self._fade_id:
+            self._interrupt_fade()
+            return
+        pausing = not self._mpv.pause
+        if not self.pause_fade or self._volume < FADE_MIN_VOLUME:
+            self._mpv.pause = pausing
+            return
+        if pausing:
+            self._start_fade("out", self._volume, 0.0)
+        else:
+            self._mpv.volume = 0.0
+            self._mpv.pause = False
+            self._start_fade("in", 0.0, self._volume)
+
+    def _start_fade(self, direction: str, start: float, end: float) -> None:
+        self._fade_dir = direction
+        self._fade_step = 0
+        self._fade_range = (start, end)
+        interval = int(PAUSE_FADE_SECONDS * 1000 / PAUSE_FADE_STEPS)
+        self._fade_id = GLib.timeout_add(interval, self._fade_tick)
+
+    def _fade_tick(self) -> bool:
+        self._fade_step += 1
+        start, end = self._fade_range
+        frac = min(1.0, self._fade_step / PAUSE_FADE_STEPS)
+        self._mpv.volume = start + (end - start) * frac
+        if frac < 1.0:
+            return GLib.SOURCE_CONTINUE
+        direction, self._fade_id, self._fade_dir = self._fade_dir, 0, ""
+        if direction == "out":
+            self._mpv.pause = True
+            self._mpv.volume = self._volume     # prêt pour la reprise
+        return GLib.SOURCE_REMOVE
+
+    def _interrupt_fade(self) -> None:
+        """Un second appui pendant le fondu inverse l'intention : on annule
+        la pause en cours, ou on pause tout de suite pendant une reprise."""
+        direction = self._fade_dir
+        GLib.source_remove(self._fade_id)
+        self._fade_id, self._fade_dir = 0, ""
+        if direction == "in":
+            self._mpv.pause = True
+        self._mpv.volume = self._volume
 
     def stop(self) -> None:
+        if self._fade_id:
+            GLib.source_remove(self._fade_id)
+            self._fade_id, self._fade_dir = 0, ""
+            self._mpv.volume = self._volume
         self._gen += 1                  # les événements en vol sont périmés
+        self._entry_id = None
         self._mpv.command("stop")
         self._track = None
         self._duration = 0.0
@@ -257,7 +325,8 @@ class Player(GObject.Object):
 
     def set_volume(self, value: float) -> None:
         """Volume 0-100."""
-        self._mpv.volume = max(0.0, min(100.0, value))
+        self._volume = max(0.0, min(100.0, value))
+        self._mpv.volume = self._volume
 
     def set_normalisation(self, enabled: bool) -> None:
         """Égalise le volume perçu entre les pistes.
@@ -268,6 +337,12 @@ class Player(GObject.Object):
         self._normalise = enabled
         self._apply_filters()
 
+    def set_gain(self, db: float) -> None:
+        """Gain de normalisation de la piste, en dB (filtre `volume`),
+        placé dans la même chaîne que l'égaliseur."""
+        self._gain_filter = f"volume={db:.2f}dB" if abs(db) >= 0.05 else ""
+        self._apply_filters()
+
     def set_equalizer(self, gains) -> None:
         """Gains des 10 bandes en dB ; `None` ou tout à zéro le désactive."""
         self._eq_filter = build_filter(gains) if gains else ""
@@ -276,21 +351,17 @@ class Player(GObject.Object):
     def _apply_filters(self) -> None:
         # L'égaliseur passe avant la normalisation : dynaudnorm rattrape
         # ainsi le niveau global que la pré-atténuation a fait perdre.
-        chain = [f for f in (self._eq_filter,
+        chain = [f for f in (self._eq_filter, self._gain_filter,
                              NORMALISE_FILTER if self._normalise else "") if f]
         try:
             self._mpv.af = ",".join(chain)
         except Exception as exc:
             log.info("Filtres audio refusés (%s) : %s", chain, exc)
 
-    def set_speed(self, speed: float) -> None:
-        """Vitesse 0.5-2.0, hauteur préservée."""
-        try:
-            self._mpv.speed = max(0.5, min(2.0, speed))
-        except Exception as exc:
-            log.info("Changement de vitesse impossible : %s", exc)
-
     def shutdown(self) -> None:
+        if self._fade_id:
+            GLib.source_remove(self._fade_id)
+            self._fade_id = 0
         self.free_render_context()
         try:
             self._mpv.terminate()
@@ -322,16 +393,19 @@ class Player(GObject.Object):
     def _on_core_idle(self, _name: str, value: bool | None) -> None:
         # core-idle passe à False dès que la lecture démarre vraiment.
         if value is False and self._state == "loading":
-            GLib.idle_add(self._set_state, "playing")
+            GLib.idle_add(self._set_state, "playing", self._gen)
 
     def _on_pause(self, _name: str, value: bool | None) -> None:
         if value is None or self._state in ("idle", "loading"):
             return
-        GLib.idle_add(self._set_state, "paused" if value else "playing")
+        GLib.idle_add(self._set_state,
+                      "paused" if value else "playing", self._gen)
 
     # ---- Émission côté thread principal -------------------------------
 
-    def _set_state(self, state: str) -> bool:
+    def _set_state(self, state: str, gen: int | None = None) -> bool:
+        if self._stale(gen):            # état d'un fichier remplacé depuis
+            return GLib.SOURCE_REMOVE
         if state != self._state:
             self._state = state
             self.emit("state-changed", state)

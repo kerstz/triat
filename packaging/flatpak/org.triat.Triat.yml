@@ -17,14 +17,38 @@ runtime-version: '51'
 sdk: org.gnome.Sdk
 command: triat
 
-# Codecs : le runtime GNOME n'embarque que ffmpeg-free, sans une bonne
-# partie des codecs (AAC, H.264) que sert YouTube. Depuis la base
-# freedesktop 25.08, l'ancienne extension org.freedesktop.Platform.ffmpeg-full
-# n'est plus publiée (dernière branche : 24.08) : elle est remplacée par
-# org.freedesktop.Platform.codecs-extra, que le runtime GNOME 51 (base
-# freedesktop 26.08) déclare et télécharge lui-même (version 26.08-extra).
-# Rien à déclarer ici. Vérifié le 2026-10-16 avec
-#   flatpak remote-info --show-metadata flathub org.gnome.Platform//51
+# Codecs et ffmpeg ---------------------------------------------------------
+# yt-dlp (FFmpegExtractAudio, EmbedThumbnail, ModifyChapters) exige la CLI
+# `ffmpeg`. Elle est fournie par le runtime : freedesktop 25.08 livre
+# /usr/bin/ffmpeg (vérifié le 2026-10-17 sur org.freedesktop.Platform//25.08
+# installé localement). L'extension org.freedesktop.Platform.codecs-extra
+# (version 26.08-extra, déclarée et téléchargée par le runtime GNOME 51) y
+# ajoute AAC/H.264 via add-ld-path.
+# L'ancienne extension org.freedesktop.Platform.ffmpeg-full n'existe PAS pour
+# ce runtime : sa dernière branche publiée est 24.08 (vérifié le 2026-10-17
+# avec `flatpak remote-ls flathub --all`). Elle n'est donc volontairement pas
+# déclarée ; la déclarer avec une branche 24.08 casserait l'installation.
+# TODO non vérifié : la présence de /usr/bin/ffmpeg dans
+# org.freedesktop.Platform//26.08 (runtime non installé ici). Le module
+# `triat` ci-dessous échoue à la construction si le binaire manque.
+
+# Rust : STOPGAP. python3-requirements.json prend encore cryptography en sdist
+# (il faut Rust pour le compiler). L'extension est déclarée pour cela ; elle
+# devient inutile une fois le fichier régénéré avec --prefer-wheels (voir
+# gen-requirements.sh), et peut alors être retirée. Branche 26.08 vérifiée
+# publiée sur Flathub le 2026-10-17. Limite : cargo télécharge ses crates, ce
+# qui est refusé hors réseau par flatpak-builder ; la voie fiable reste les
+# wheels. Construction non testée ici.
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  build-args:
+    - --share=network   # TODO non vérifié : seulement pour cargo (cryptography sdist)
+
+# cava (spectre de la Matrice) est ABSENT du bac à sable : aucun module ne le
+# construit. La Matrice est donc désactivée proprement côté application
+# (elle ne s'active que si le binaire `cava` est trouvé).
 
 finish-args:
   # --- Indispensable ------------------------------------------------------
@@ -122,16 +146,36 @@ modules:
             tag: v7.349.0
             commit: 1fd3c7bde7b943fe8985c893310b5269a09b46c5
 
+  # --- Deno : runtime JavaScript de yt-dlp (EJS) --------------------------
+  # yt-dlp résout les défis de signature et `n` de YouTube avec deno
+  # (triat/core/extractor.py, JS_RUNTIMES). Binaire officiel v2.9.7, une
+  # archive par architecture ; sha256 calculés le 2026-10-17 sur les archives
+  # téléchargées depuis github.com/denoland/deno/releases.
+  - name: deno
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 deno /app/bin/deno
+    sources:
+      - type: archive
+        archive-type: zip
+        only-arches: [x86_64]
+        url: https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-unknown-linux-gnu.zip
+        sha256: c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490
+      - type: archive
+        archive-type: zip
+        only-arches: [aarch64]
+        url: https://github.com/denoland/deno/releases/download/v2.9.7/deno-aarch64-unknown-linux-gnu.zip
+        sha256: c832298b1ad4422481334855f6003e0f54145762c5a134f20a489511d2f65bbf
+
   # --- Dépendances Python -------------------------------------------------
   # Généré par packaging/flatpak/gen-requirements.sh (flatpak-pip-generator,
   # à partir de requirements.lock) : URL PyPI et sha256 figés, pip ne
   # télécharge rien à la construction. PyGObject vient du runtime GNOME.
-  # TODO (à vérifier avant publication) : cryptography, cffi, brotli,
-  # pycryptodomex et zeroconf sont pris en sdist. cryptography demande Rust
-  # (maturin) à la construction : régénérer avec
-  #   --prefer-wheels=cryptography,cffi,brotli,pycryptodomex,zeroconf
-  # (nécessite org.gnome.Sdk//51 installé), ou ajouter l'extension
-  # org.freedesktop.Sdk.Extension.rust-stable. Construction non testée ici.
+  # À FAIRE avant publication : cryptography, cffi, brotli, pycryptodomex et
+  # zeroconf sont encore pris en sdist dans ce fichier (flatpak-pip-generator
+  # est absent de la machine de développement, donc non régénéré). Relancer
+  # gen-requirements.sh, qui demande désormais --prefer-wheels : les wheels
+  # remplacent alors les sdists et l'extension rust-stable devient inutile.
   - python3-requirements.json
 
   # --- Triat ---------------------------------------------------------------
@@ -140,6 +184,7 @@ modules:
   - name: triat
     buildsystem: simple
     build-commands:
+      - test -x /usr/bin/ffmpeg   # fourni par le runtime freedesktop
       - install -Dm755 packaging/flatpak/triat.sh /app/bin/triat
       - mkdir -p /app/share/triat
       - cp -r triat data /app/share/triat/

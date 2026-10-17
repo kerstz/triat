@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 import gi
 
@@ -166,7 +167,7 @@ def cmd_cookies(args) -> int:
           f" | session authentifiée : {'oui' if status.authenticated else 'non'}"
           + (f" | expire dans {days:.1f} j" if days is not None else ""))
     if status.expired:
-        print("⚠  Session expirée : réimportez les cookies.")
+        print("⚠  Session expirée : réimporte les cookies.")
     return 0
 
 
@@ -206,7 +207,7 @@ def cmd_playlists(args) -> int:
     engine = Engine()
     playlists = engine.library.list_playlists()
     if not playlists:
-        print("Aucune playlist. Importez-en une : triat import <fichier>")
+        print("Aucune playlist. Importe-en une : triat import <fichier>")
         engine.library.close()
         return 0
     for item in playlists:
@@ -338,8 +339,10 @@ def pare_feux_actifs(lancer=subprocess.run) -> list[str]:
 def commande_ouverture(pare_feu: str, port: int) -> str:
     """Commande qui ouvre le port TCP `port` dans le pare-feu indiqué."""
     if pare_feu == "ufw":
-        return f"sudo ufw allow {port}/tcp"
-    return f"sudo firewall-cmd --add-port={port}/tcp"
+        # 5353/udp : la découverte mDNS (sans elle, seule la saisie manuelle).
+        return f"sudo ufw allow {port}/tcp && sudo ufw allow 5353/udp"
+    return (f"sudo firewall-cmd --permanent --add-port={port}/tcp "
+            "--add-service=mdns && sudo firewall-cmd --reload")
 
 
 def message_synchro(active: bool, ecoute: bool, pare_feux: list[str],
@@ -360,13 +363,57 @@ def message_synchro(active: bool, ecoute: bool, pare_feux: list[str],
         commandes = " ou ".join(commande_ouverture(p, port) for p in pare_feux)
         niveau = "warn"
         texte += (f" — pare-feu actif ({', '.join(pare_feux)}) : si le téléphone "
-                  f"ne voit pas le bureau, ouvrez le port : {commandes}")
+                  f"ne voit pas le bureau, ouvre le port : {commandes}")
     return niveau, texte
+
+
+def port_ecoute_reel() -> int | None:
+    """Port écrit par le serveur de l'app en cours (`sync.port`) : c'est le
+    port réellement lié, qui peut différer du réglage après un repli."""
+    from .core.sync import read_port_file
+
+    try:
+        return read_port_file()
+    except Exception:
+        return None
+
+
+def _lignes_soundcloud(settings, client=None) -> list[tuple[str, str, str]]:
+    """Section SoundCloud de `triat doctor`. Désactivé : une ligne, aucun
+    réseau. Le client_id n'est jamais affiché, seulement son âge."""
+    if not settings.get("soundcloud_enabled"):
+        return [("soundcloud", "ok", "désactivé")]
+    import time
+
+    from .core import paths
+    from .core.soundcloud import SoundCloudClient
+
+    lines = [("soundcloud", "ok", "activé")]
+    try:
+        found = float(json.loads(
+            (paths.cache_dir() / "soundcloud.json").read_text(encoding="utf-8"))["found_at"])
+        age = max(0, int(time.time() - found))
+        lines.append(("soundcloud client_id", "ok",
+                      f"en cache depuis {age // 3600} h {age % 3600 // 60} min"))
+    except (OSError, ValueError, KeyError, TypeError):
+        lines.append(("soundcloud client_id", "warn", "pas encore en cache"))
+    try:
+        (client or SoundCloudClient()).search_tracks("test", limit=1)
+        lines.append(("soundcloud api", "ok", "recherche de test réussie"))
+    except Exception as exc:
+        lines.append(("soundcloud api", "fail",
+                      f"recherche de test échouée ({exc.__class__.__name__})"))
+    try:
+        import yt_dlp.extractor.soundcloud  # noqa: F401
+        lines.append(("soundcloud repli yt-dlp", "ok", "extracteur disponible"))
+    except Exception:
+        lines.append(("soundcloud repli yt-dlp", "warn", "extracteur indisponible"))
+    return lines
 
 
 def _ligne_synchro(settings) -> tuple[str, str, str]:
     active = bool(settings.get("sync_enabled"))
-    port = port_synchro(settings)
+    port = (port_ecoute_reel() if active else None) or port_synchro(settings)
     ecoute = serveur_synchro_ecoute(port) if active else False
     pare_feux = pare_feux_actifs() if active else []
     niveau, texte = message_synchro(active, ecoute, pare_feux, port)
@@ -390,6 +437,44 @@ def js_runtime_check() -> tuple[str, str, str]:
     if not has_ejs:
         missing.append("paquet yt-dlp-ejs absent (pip install 'yt-dlp[default]')")
     return ("moteur js", "warn", " · ".join(missing))
+
+
+def cmd_backup(args) -> int:
+    """Sauvegarde, liste ou restaure library.db (voir core/backup.py)."""
+    from .core import backup
+
+    action = args.action or "create"
+    try:
+        if action == "list":
+            items = backup.list_backups()
+            for path in items:
+                print(f"{path.name}  {path.stat().st_size // 1024} Ko")
+            if not items:
+                print("Aucune sauvegarde.")
+            return 0
+        if action == "restore":
+            if not args.file:
+                print("Indique le fichier à restaurer.", file=sys.stderr)
+                return 2
+            if not args.yes:
+                print("La restauration remplace ta bibliothèque actuelle "
+                      "(mise de côté). Relance avec --yes pour confirmer.",
+                      file=sys.stderr)
+                return 1
+            if serveur_synchro_ecoute(port_synchro(Settings())):
+                print("Triat semble tourner : ferme-le avant de restaurer.",
+                      file=sys.stderr)
+                return 1
+            aside = backup.restore_backup(Path(args.file))
+            print(f"Restauré. Ancienne base conservée : {aside}")
+            return 0
+        path = backup.create_backup()
+        backup.rotate(path.parent)
+        print(path)
+        return 0
+    except backup.BackupError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 def cmd_doctor(args) -> int:
@@ -476,6 +561,7 @@ def cmd_doctor(args) -> int:
                        "dotfiles absents — thème de Triat par défaut"))
 
     checks.append(_ligne_synchro(engine.settings))
+    checks.extend(_lignes_soundcloud(engine.settings))
 
     marks = {"ok": "✓", "warn": "~", "fail": "✗"}
     width = max(len(name) for name, _, _ in checks)
@@ -531,6 +617,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_stats = sub.add_parser("stats", help="statistiques d'écoute")
     p_stats.add_argument("-n", "--limit", type=int, default=10)
     p_stats.set_defaults(func=cmd_stats)
+
+    p_backup = sub.add_parser("backup", help="sauvegarder / restaurer la bibliothèque")
+    p_backup.add_argument("action", nargs="?", default="create",
+                          choices=("create", "list", "restore"))
+    p_backup.add_argument("file", nargs="?", help="sauvegarde à restaurer")
+    p_backup.add_argument("--yes", action="store_true",
+                          help="confirmer la restauration")
+    p_backup.set_defaults(func=cmd_backup)
 
     p_doctor = sub.add_parser("doctor", help="vérifier les dépendances externes")
     p_doctor.set_defaults(func=cmd_doctor)

@@ -57,7 +57,8 @@ class VideoArea(Gtk.GLArea):
     """Affiche la vidéo de l'instance mpv du `Player`."""
 
     def __init__(self, player) -> None:
-        super().__init__()
+        # Décor : la vidéo n'a pas d'équivalent textuel.
+        super().__init__(accessible_role=Gtk.AccessibleRole.PRESENTATION)
         self._player = player
         self._ctx = None
         self._get_integerv = None

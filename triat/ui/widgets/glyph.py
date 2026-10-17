@@ -27,6 +27,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf, GLib, Graphene, Gsk, Gtk
 
 from ...core import artwork
+from .common import animations_enabled
 from .cover import TEXTURES
 from .dot_progress import rgba
 
@@ -108,7 +109,9 @@ class GlyphArt(Gtk.Widget):
 
     def __init__(self, grid: int = 16, size: int = 120,
                  radius: float = 24.0, square: bool = True) -> None:
-        super().__init__()
+        # Décor pur : le sens (titre, pochette) est porté par les widgets
+        # voisins ; les lecteurs d'écran n'ont rien à y lire.
+        super().__init__(accessible_role=Gtk.AccessibleRole.PRESENTATION)
         self.add_css_class("triat-glyph")
         self.grid = grid
         self._size = size
@@ -150,7 +153,10 @@ class GlyphArt(Gtk.Widget):
             TEXTURES.submit(self._load, url, token)
 
     def set_levels(self, levels: list[float]) -> None:
-        """Spectre 0-1 par bande ; liste vide pour l'arrêter."""
+        """Spectre 0-1 par bande ; liste vide pour l'arrêter. Ignoré quand
+        les animations sont désactivées (`gtk-enable-animations`)."""
+        if levels and not animations_enabled(self):
+            levels = []
         self._levels = levels
         self.queue_draw()
 

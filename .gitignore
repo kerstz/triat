@@ -1,19 +1,34 @@
-__pycache__/
-*.pyc
 .venv/
-.pytest_cache/
-*.cookies.txt
-*.cookies.json
+__pycache__/
+*.py[cod]
 .ruff_cache/
 .mypy_cache/
-# Binaires et secrets : jamais dans le dépôt (Releases GitHub pour les APK)
+.pytest_cache/
+*.log
+/cache/
+
+# Binaires, archives et secrets : jamais versionnés (Releases GitHub pour
+# les APK, avec leur SHA-256)
 *.apk
 *.aab
 *.jks
 *.keystore
+*.zip
 local.properties
-# Listes d'écoute personnelles
+*.cookies.txt
+*.cookies.json
+
+# Archives locales (anciens APK, maquettes, listes d'écoute personnelles)
+/archives/
 youtube-mix-*.txt
+
+# Dépôts git séparés (kerstz/triat et kerstz/triat-android)
+/triat-public/
+/Koda/
+
 # Sortie de flatpak-builder
 /build/
 /.flatpak-builder/
+
+# Catalogues gettext compilés (artefacts de build, voir tools/i18n.sh)
+/triat/locale/

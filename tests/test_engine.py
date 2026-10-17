@@ -13,10 +13,11 @@ from gi.repository import GLib
 
 from triat.core.engine import Engine
 from triat.core.library import Library
-from triat.core.models import Segment, TrackRef
+from triat.core.models import Segment, Track, TrackRef
 from triat.core.settings import Settings
 from triat.core.sponsorblock import ASK, SKIP
-from tests.fakes import FakeExtractor, FakePlayer, FakeRecommender, FakeSponsorBlock
+from tests.fakes import (FakeCookies, FakeExtractor, FakePlayer, FakeRecommender,
+                         FakeSponsorBlock)
 
 
 def pump(condition=None, timeout: float = 2.0) -> bool:
@@ -664,11 +665,13 @@ def test_autoplay_does_not_hammer_radio_when_it_returns_nothing(engine):
     assert len(calls) == 1
 
 
-def test_wipe_user_data_clears_everything(engine, monkeypatch):
+def test_wipe_user_data_clears_everything(engine, monkeypatch, tmp_path):
     import types
     from triat.core import artwork
     cleared = []
     monkeypatch.setattr(artwork, "clear_cache", lambda: cleared.append(1))
+    # Journal et file de scrobbles : jamais ceux de l'utilisateur.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     engine.cookies = types.SimpleNamespace(clear=lambda: cleared.append("cookies"))
     engine.play_refs(refs(2))
     assert pump(lambda: engine.player.played)
@@ -825,3 +828,430 @@ def test_block_drops_upcoming_radio_items_only(engine):
     engine.library.block("artist", "Banni", "Banni")
     assert engine.drop_blocked_upcoming() == 1
     assert [t.video_id for t in engine.queue.items] == ["v0", "mine", "keep", "rad2"]
+
+
+# ---- Lot W3-A : moteur --------------------------------------------------
+
+def _state_home(monkeypatch, tmp_path):
+    """Isole journal et file de scrobbles du profil réel."""
+    state = tmp_path / "xdg-state"
+    state.mkdir(exist_ok=True)
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    return state
+
+
+def _real_services_engine(tmp_path, **kw):
+    settings = Settings(tmp_path / "settings.json")
+    settings.set("autoplay_radio", False)
+    settings.set("sync_port", 0)
+    return Engine(settings=settings, library=Library(tmp_path / "lib.db"),
+                  player=FakePlayer(), extractor=FakeExtractor(),
+                  recommender=FakeRecommender(), ytmusic=object(),
+                  cookies=object(), **kw)
+
+
+def test_private_session_writes_no_lyrics_nor_segments(tmp_path):
+    eng = _real_services_engine(tmp_path)
+    try:
+        eng.settings.set("private_session", True)
+        vid = "dQw4w9WgXcQ"
+        eng.sponsorblock.fetch = lambda video_id, cats: [
+            Segment(10.0, 20.0, "sponsor", "u1")]
+        entry = {"plainLyrics": "\n".join(f"ligne {i}" for i in range(10))}
+        eng.lyrics._call = lambda *a, **k: entry
+        got = eng.sponsorblock.segments_for(vid, ["sponsor"], 200.0)
+        assert got
+        eng.lyrics.fetch(TrackRef(vid, "Titre", "Artiste", duration=200.0))
+        db = eng.library._db
+        assert db.execute("SELECT COUNT(*) FROM lyrics").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM segment_fetches").fetchone()[0] == 0
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_wipe_user_data_contract_and_extras(engine, monkeypatch, tmp_path):
+    import types
+    state = _state_home(monkeypatch, tmp_path)
+    calls = []
+    engine.downloads = types.SimpleNamespace(
+        cancel_all=lambda: calls.append("cancel"),
+        delete_all_files=lambda: calls.append("delete_files"))
+    engine.cookies = types.SimpleNamespace(clear=lambda: None)
+    engine.scrobbler._queue_path = state / "scrobble-queue.json"
+    engine.scrobbler._enqueue({"listened_at": 1, "track_metadata": {"a": 1}})
+    assert engine.scrobbler.pending()
+    engine.settings.set("visitor_data", "xyz")
+    engine.innertube = types.SimpleNamespace(
+        reset_visitor=lambda: calls.append("visitor"))
+    wiped = []
+    engine.connect("data-wiped", lambda _e: wiped.append(1))
+    monkeypatch.setattr("triat.core.logs.truncate",
+                        lambda: calls.append("logs"))
+    monkeypatch.setattr(engine.library, "delete_corrupt_copies",
+                        lambda: calls.append("corrupt") or 0)
+    engine.wipe_user_data()
+    assert engine.scrobbler.pending() == []
+    assert engine.settings.get("visitor_data") in (None, "")
+    assert {"cancel", "visitor", "logs", "corrupt"} <= set(calls)
+    assert "delete_files" not in calls
+    assert wiped == [1]
+    calls.clear()
+    engine.wipe_user_data(delete_downloads=True)
+    assert "delete_files" in calls and "cancel" in calls
+
+
+def test_shutdown_closes_library_under_drain_and_removes_autosave(
+        tmp_path, monkeypatch):
+    eng = _real_services_engine(tmp_path)
+    order = []
+    import contextlib
+
+    @contextlib.contextmanager
+    def fake_drain():
+        order.append("enter")
+        yield
+        order.append("exit")
+
+    eng.sync.drain = fake_drain
+    real_close = eng.library.close
+    eng.library.close = lambda: (order.append("close"), real_close())
+    removed = []
+    real_remove = GLib.source_remove
+    monkeypatch.setattr(GLib, "source_remove",
+                        lambda i: (removed.append(i), real_remove(i))[1])
+    timer = eng._autosave_id
+    assert timer
+    eng.shutdown()
+    assert order == ["enter", "close", "exit"]
+    assert timer in removed
+
+
+def test_segments_changed_signal_and_accessor(tmp_path):
+    seg = Segment(10.0, 20.0, "sponsor", "u")
+    eng = Engine(settings=_seg_settings(tmp_path),
+                 library=Library(tmp_path / "lib.db"), player=FakePlayer(),
+                 extractor=FakeExtractor(),
+                 sponsorblock=FakeSponsorBlock([seg]),
+                 recommender=FakeRecommender(), ytmusic=object(),
+                 cookies=object())
+    try:
+        seen = []
+        eng.connect("segments-changed", lambda _e, segs: seen.append(segs))
+        assert eng.current_segments() == []
+        eng.play_refs(refs(2))
+        assert pump(lambda: seen)
+        assert seen[0] == [seg] and eng.current_segments() == [seg]
+        eng.stop()
+        assert seen[-1] == [] and eng.current_segments() == []
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def _seg_settings(tmp_path):
+    s = Settings(tmp_path / "settings.json")
+    s.set("autoplay_radio", False)
+    s.set("sync_port", 0)
+    s.set("sponsorblock_enabled", True)
+    s.set("sponsorblock_categories", {"sponsor": SKIP})
+    return s
+
+
+def test_stale_radio_result_is_ignored(tmp_path):
+    eng = _real_services_engine(tmp_path)
+    try:
+        eng.settings.set("autoplay_radio", True)
+        eng.play_refs(refs(1))
+        assert pump(lambda: eng.player.played)
+        pump(timeout=0.2)
+        eng._refilling = True
+        eng._radio_token += 1
+        stale = eng._radio_token
+        eng._radio_token += 1               # une autre radio a pris le relais
+        before = list(eng.queue.items)
+        eng._autoplay_ready(refs(5)[2:], stale, eng._current_ref.video_id, "x")
+        assert eng.queue.items == before
+        # La piste de départ a changé : résultat jeté aussi.
+        eng._autoplay_ready(refs(5)[2:], eng._radio_token, "autre", "x")
+        assert eng.queue.items == before
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_radio_inputs_are_prepared_on_main_thread_with_reason(tmp_path):
+    reco = FakeRecommender(radio=refs(8)[3:])
+    reco.last_reason = "Parce que"
+    eng = Engine(settings=_seg_settings(tmp_path),
+                 library=Library(tmp_path / "lib.db"), player=FakePlayer(),
+                 extractor=FakeExtractor(), sponsorblock=FakeSponsorBlock(),
+                 recommender=reco, ytmusic=object(), cookies=object())
+    try:
+        pump(timeout=0.2)               # laisse passer les rappels du démarrage
+        eng.settings.set("autoplay_radio", True)
+        eng.settings.set("private_session", True)
+        eng.queue.set_items(refs(2))
+        # set_items lance la résolution de la piste 0, qui réécrit
+        # `_current_ref` : on attend qu'elle ait fini avant de poser le
+        # point de départ, sinon la radio est jugée périmée (origine changée).
+        assert pump(lambda: eng._busy_count == 0 and eng.player.played)
+        pump(timeout=0.1)
+        eng._current_ref = refs(2)[1]
+        eng._refilling = False
+        eng._try_autoplay()
+        assert pump(lambda: reco.calls)
+        call = reco.calls[0]
+        assert call["private"] is True
+        assert call["exclude"] == [r.video_id for r in refs(2)]
+        assert pump(lambda: eng.radio_reason == "Parce que")
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_busy_stays_on_until_all_requests_finish(engine):
+    seen = []
+    engine.connect("busy", lambda _e, b: seen.append(b))
+    engine._set_busy(True)
+    engine._set_busy(True)
+    engine._set_busy(False)
+    assert engine._busy is True and seen == [True]
+    engine._set_busy(False)
+    assert engine._busy is False and seen == [True, False]
+    engine._set_busy(False)             # jamais négatif
+    assert engine._busy_count == 0
+
+
+def test_failure_cap_is_ten_even_for_a_long_queue(tmp_path):
+    ids = {f"v{i}" for i in range(40)}
+    eng = Engine(settings=_seg_settings(tmp_path),
+                 library=Library(tmp_path / "lib.db"), player=FakePlayer(),
+                 extractor=FakeExtractor(ids), sponsorblock=FakeSponsorBlock(),
+                 recommender=FakeRecommender(), ytmusic=object(),
+                 cookies=object())
+    try:
+        errors = []
+        eng.connect("error", lambda _e, m: errors.append(m))
+        eng.play_refs(refs(40))
+        assert pump(lambda: any("interrompue" in m for m in errors), 15.0)
+        assert len(eng.extractor.resolved) <= 11
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+# ---- SoundCloud (SC-T8) -------------------------------------------------
+
+def _sc_ref(n: int = 1, duration: float = 180.0) -> TrackRef:
+    return TrackRef(f"soundcloud:tracks:{n}", f"SC {n}", "Auteur", duration)
+
+
+def _sc_engine(tmp_path, *, unplayable=None, radio=None, sponsorblock=None):
+    from tests.fakes import FakeSoundCloud
+    from triat.core.sources import SourceRouter
+    settings = _seg_settings(tmp_path)
+    settings.set("soundcloud_enabled", True)
+    fake = FakeSoundCloud([FakeSoundCloud.make_track(1), FakeSoundCloud.make_track(2),
+                           FakeSoundCloud.make_track(3)],
+                          unplayable=unplayable)
+    router = SourceRouter(FakeExtractor(), fake, settings)
+    reco = FakeRecommender(radio=radio or [])
+    sb = sponsorblock or FakeSponsorBlock([Segment(1.0, 5.0, "sponsor", "u")])
+    eng = Engine(settings=settings, library=Library(tmp_path / "lib.db"),
+                 player=FakePlayer(), extractor=router, sponsorblock=sb,
+                 recommender=reco, ytmusic=object(), cookies=object())
+    return eng, reco, sb
+
+
+def test_expires_soon_reads_expire_or_expires():
+    from triat.core.engine import _expires_soon
+    soon = int(time.time()) + 30
+    assert _expires_soon(f"https://x.invalide/a?expire={soon}")
+    assert _expires_soon(f"https://x.invalide/a?expires={soon}")
+    far = int(time.time()) + 36000
+    assert not _expires_soon(f"https://x.invalide/a?expires={far}")
+
+
+def test_soundcloud_track_triggers_no_sponsorblock_call(tmp_path):
+    eng, _reco, sb = _sc_engine(tmp_path)
+    try:
+        eng.play_refs([_sc_ref(1)])
+        assert pump(lambda: eng.player.played)
+        pump(timeout=0.2)
+        assert sb.calls == []
+        assert eng.current_segments() == []
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_soundcloud_track_has_no_clip(tmp_path):
+    eng, _reco, _sb = _sc_engine(tmp_path)
+    try:
+        eng._load_video(_sc_ref(1), eng._load_token)
+        assert eng._video_state == "unavailable"
+        assert eng.extractor._youtube.video_heights == []
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_backfill_ignores_soundcloud_ids(tmp_path):
+    from tests.fakes import FakeCookies, FakeInnerTube
+    inner = FakeInnerTube()
+    inner.lengths = {}
+    eng = Engine(settings=Settings(tmp_path / "s.json"),
+                 library=Library(tmp_path / "l.db"), player=FakePlayer(),
+                 extractor=FakeExtractor(), sponsorblock=FakeSponsorBlock(),
+                 recommender=FakeRecommender(), ytmusic=object(),
+                 cookies=FakeCookies(), innertube=inner)
+    try:
+        eng.library.upsert_many([_sc_ref(7, 0.0)])
+        asked = []
+        inner.video_length = lambda vid: asked.append(vid)
+        eng.backfill_durations_async()
+        pump(timeout=0.3)
+        assert asked == []
+    finally:
+        eng.library.close()
+
+
+def test_no_radio_after_a_soundcloud_track(tmp_path):
+    eng, reco, _sb = _sc_engine(tmp_path, radio=refs(5))
+    try:
+        eng.settings.set("autoplay_radio", True)
+        eng.play_refs([_sc_ref(1)])
+        assert pump(lambda: eng.player.played)
+        eng._try_autoplay()
+        eng.start_radio()
+        pump(timeout=0.3)
+        assert reco.calls == []
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_unplayable_soundcloud_track_moves_on_with_a_precise_label(tmp_path):
+    eng, _reco, _sb = _sc_engine(tmp_path, unplayable={1: "snip"})
+    try:
+        errors = []
+        eng.connect("error", lambda _e, m: errors.append(m))
+        eng.play_refs([_sc_ref(1), _sc_ref(2)])
+        assert pump(lambda: eng.player.played)
+        assert any("Extrait Go+" in m for m in errors)
+        assert eng.current.video_id == "soundcloud:tracks:2"
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_default_router_has_soundcloud_off_and_can_be_toggled(tmp_path):
+    from triat.core.sources import SourceRouter
+    settings = Settings(tmp_path / "s.json")
+    settings.set("sync_port", 0)
+    eng = Engine(settings=settings, library=Library(tmp_path / "l.db"),
+                 player=FakePlayer(), sponsorblock=FakeSponsorBlock(),
+                 recommender=FakeRecommender(), ytmusic=object(),
+                 cookies=FakeCookies())
+    try:
+        assert isinstance(eng.extractor, SourceRouter)
+        assert eng.soundcloud is None
+        eng.set_soundcloud_enabled(True)
+        client = eng.soundcloud
+        assert client is not None
+        eng.set_soundcloud_enabled(True)
+        assert eng.soundcloud is client
+        assert settings.get("soundcloud_enabled") is True
+        eng.set_soundcloud_enabled(False)
+        assert eng.soundcloud is None and eng.extractor.soundcloud is None
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+# ---- Normalisation par piste et fondu de pause (F03, F04) ---------------
+
+class _LoudTrack(Track):
+    """Track avec un loudness annoncé (sous-classe sans slots)."""
+
+
+class _GainPlayer(FakePlayer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gains: list[float] = []
+
+    def set_gain(self, db: float) -> None:
+        self.gains.append(db)
+
+
+def _loud(video_id: str, loudness) -> Track:
+    track = _LoudTrack(video_id, "T", "A", 200.0, "https://x.invalide/a.webm",
+                       "https://x.invalide/a")
+    track.loudness_db = loudness
+    return track
+
+
+def test_normalisation_gain_is_clamped_and_defensive():
+    from triat.core.engine import normalisation_gain
+    assert normalisation_gain(None) == 0.0
+    assert normalisation_gain("abc") == 0.0
+    assert normalisation_gain(float("nan")) == 0.0
+    assert normalisation_gain(0.0) == 0.0
+    assert normalisation_gain(3.0) == -3.0       # piste trop forte : on baisse
+    assert normalisation_gain(-4.0) == 4.0
+    assert normalisation_gain(30.0) == -12.0     # bornes
+    assert normalisation_gain(-30.0) == 6.0
+
+
+def test_track_gain_applied_per_source_and_setting(tmp_path):
+    eng = Engine(settings=_seg_settings(tmp_path),
+                 library=Library(tmp_path / "lib.db"), player=_GainPlayer(),
+                 extractor=FakeExtractor(), sponsorblock=FakeSponsorBlock(),
+                 recommender=FakeRecommender(), ytmusic=object(),
+                 cookies=object())
+    try:
+        assert eng.settings.get("normalise_volume") is True
+        eng._apply_track_gain(_loud("aaaaaaaaaaa", 5.0))
+        eng._apply_track_gain(_loud("soundcloud:tracks:1", 5.0))
+        eng._apply_track_gain(Track("bbbbbbbbbbb", "T", "A", 1.0, "u", "w"))
+        assert eng.player.gains == [-5.0, 0.0, 0.0]
+        eng.player.gains.clear()
+        eng.set_normalisation(False)
+        eng._apply_track_gain(_loud("aaaaaaaaaaa", 5.0))
+        assert eng.player.gains == [0.0]
+        assert eng.settings.get("normalise_volume") is False
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_gain_is_set_before_the_track_starts(tmp_path):
+    class LoudExtractor(FakeExtractor):
+        def resolve(self, url):
+            base = super().resolve(url)
+            track = _loud(base.video_id, 2.0)
+            track.title = base.title
+            return track
+
+    eng = Engine(settings=_seg_settings(tmp_path),
+                 library=Library(tmp_path / "lib.db"), player=_GainPlayer(),
+                 extractor=LoudExtractor(), sponsorblock=FakeSponsorBlock(),
+                 recommender=FakeRecommender(), ytmusic=object(),
+                 cookies=object())
+    try:
+        eng.play_refs([TrackRef("aaaaaaaaaaa", "T", "A", 200.0)])
+        assert pump(lambda: eng.player.played)
+        assert eng.player.gains == [-2.0]
+    finally:
+        eng.sync.stop()
+        eng.library.close()
+
+
+def test_pause_fade_setting_reaches_the_player(engine):
+    assert engine.settings.get("pause_fade") is True
+    assert engine.player.pause_fade is True
+    engine.set_pause_fade(False)
+    assert engine.player.pause_fade is False
+    assert engine.settings.get("pause_fade") is False

@@ -1,0 +1,174 @@
+{
+ "_comment": "Instantané de référence du protocole de synchro v1 (golden). Partagé avec Koda (app/src/test/resources/sync_v1_snapshot.json) : ne le modifier que des deux côtés.",
+ "key_hex": "606fe13a7668cca6e4723797a03f91330d6ca6f5db39eb0795e2e1f4a13bf3cf",
+ "device_id": "phone-1",
+ "request_ts": 1700000000000,
+ "request_n": "AAECAwQFBgcICQoLDA0ODw==",
+ "snapshot": {
+  "v": 1,
+  "playlists": [
+   {
+    "uid": "pl-1",
+    "name": "Route",
+    "updated": 1700000000000,
+    "deleted": false,
+    "tracks": [
+     {
+      "id": "dQw4w9WgXcQ",
+      "title": "Titre un",
+      "artist": "Artiste A",
+      "duration": 212.0,
+      "thumb": null
+     },
+     {
+      "id": "9bZkp7q19f0",
+      "title": "Titre deux",
+      "artist": "Artiste B",
+      "duration": 253.5,
+      "thumb": null
+     }
+    ]
+   },
+   {
+    "uid": "pl-gone",
+    "name": "",
+    "updated": 1700000100000,
+    "deleted": true,
+    "tracks": []
+   }
+  ],
+  "likes": [
+   {
+    "id": "dQw4w9WgXcQ",
+    "at": 1700000200000,
+    "liked": true,
+    "track": {
+     "id": "dQw4w9WgXcQ",
+     "title": "Titre un",
+     "artist": "Artiste A",
+     "duration": 212.0,
+     "thumb": null
+    }
+   },
+   {
+    "id": "kJQP7kiw5Fk",
+    "at": 1700000300000,
+    "liked": false,
+    "track": null
+   }
+  ],
+  "history": [
+   {
+    "id": "9bZkp7q19f0",
+    "at": 1700000400000,
+    "seconds": 42.5,
+    "track": {
+     "id": "9bZkp7q19f0",
+     "title": "Titre deux",
+     "artist": "Artiste B",
+     "duration": 253.5,
+     "thumb": null
+    }
+   },
+   {
+    "id": "dQw4w9WgXcQ",
+    "at": 1700000500000,
+    "seconds": 0.0,
+    "track": {
+     "id": "dQw4w9WgXcQ",
+     "title": "Titre un",
+     "artist": "Artiste A",
+     "duration": 212.0,
+     "thumb": null
+    }
+   }
+  ]
+ },
+ "merged": {
+  "v": 1,
+  "playlists": [
+   {
+    "uid": "pl-1",
+    "name": "Route",
+    "updated": 1700000000000,
+    "deleted": false,
+    "tracks": [
+     {
+      "id": "dQw4w9WgXcQ",
+      "title": "Titre un",
+      "artist": "Artiste A",
+      "duration": 212.0,
+      "thumb": null
+     },
+     {
+      "id": "9bZkp7q19f0",
+      "title": "Titre deux",
+      "artist": "Artiste B",
+      "duration": 253.5,
+      "thumb": null
+     }
+    ]
+   },
+   {
+    "uid": "pl-gone",
+    "name": "",
+    "updated": 1700000100000,
+    "deleted": true,
+    "tracks": []
+   }
+  ],
+  "likes": [
+   {
+    "id": "dQw4w9WgXcQ",
+    "at": 1700000200000,
+    "liked": true,
+    "track": {
+     "id": "dQw4w9WgXcQ",
+     "title": "Titre un",
+     "artist": "Artiste A",
+     "duration": 212.0,
+     "thumb": null
+    }
+   },
+   {
+    "id": "kJQP7kiw5Fk",
+    "at": 1700000300000,
+    "liked": false,
+    "track": null
+   }
+  ],
+  "history": [
+   {
+    "id": "dQw4w9WgXcQ",
+    "at": 1700000500000,
+    "seconds": 0.0,
+    "track": {
+     "id": "dQw4w9WgXcQ",
+     "title": "Titre un",
+     "artist": "Artiste A",
+     "duration": 212.0,
+     "thumb": null
+    }
+   },
+   {
+    "id": "9bZkp7q19f0",
+    "at": 1700000400000,
+    "seconds": 42.5,
+    "track": {
+     "id": "9bZkp7q19f0",
+     "title": "Titre deux",
+     "artist": "Artiste B",
+     "duration": 253.5,
+     "thumb": null
+    }
+   }
+  ],
+  "now": 1700000600000
+ },
+ "blobs": {
+  "legacy_request": "AQEBAQEBAQEBAQEBFk7y0ZKWI4TtbIoo3KFyDhp/07CNrYwmKNrbNXk1V613no2x3XsZswmcSTt4TNRRH4KWbAj2O2Pl/ibi7xnt8TIp5Dbj+W+pcUaNRbq0c7ZkrkxRk2ZMiEX7NRpAji2FDbZ/8P1XKGKUwNC+VLbQg1J/HMn53QlU45ZyRMSPgbJuSyXmNAsptOrlHAsdL37Z018qH97Iv5j4L2NH4xP3+24D84kqBcB2XrWCM/kesMymoW8ozd/U6oBBe/fzKj13FDeNBrPCwMaiHkbJLwrPliGLjWqyvcwbbwa6ARzdIUl240JDUt73p3R0V5lvhN0G5nIbjOCkcIuVMZ0/dZgiGvgMoQvOtCKcIK5pk04nFoBZMzPPNwIF75NBZu/+Sb9C0YSQ0yv9mNObNzx1qroZublJddpnbSZb2XiqK8j/bbodi48=",
+  "bound_request": "AgICAgICAgICAgICDBvclPXhh2HMw+0jhPtzopZzVlnqcrQIPpyzda2nrO+yvwqtt7ru6HxXhDBzAdxnN53iCFxpi1JfzYnTpBEUwz45ZrStGNSZsxNa+peiKyNPnHNAS+Qf9F4a5TIefOtzYXv6bTVp8I1LG3xRhMhGB3CQWSOm/zGP6eGUPne/Z8oOzh6ITXp920sjY0fD8lbabTUZeeCjvHpp2jFPHdkhoh4vOGhe8dfyQayEqz4Fx5efL67i/DuGK1DHm0hj99tnRFBxTS6K0OXxy6t7C4cDV9qbBL4cZOeOKoRnKRuQ2YO2XBoV5LoMOhGYqD1Q3M6f9NIgmmWy6bJW+qrUdg7P1TtdM5+bzkpk9yuLdsxuKe5wcfMf5v+cL2ujkRQZ+ZTWJIc3hXKkcWeapR3H0Nfpul2gnh0TyqyvlcnjB/1M99ti9hl3LGBF8sEos4rm/NMJp1BThp9lymhnDTW3WdoT5MT1yIwg",
+  "legacy_response": "AwMDAwMDAwMDAwMDnaJY7hfSE5MCZKO9yq4vHoEMO3nIfm55NxLwQFCwhcBOOibdsnRRgwYSADITG1/po6PIsFSlvGF0HrGkEGfWAL7fk9u+Rb8poJml3R7ZC6c5Yc99XiC60b4PTjoUYJkdX5k7TiioavO7Ka9+ahbPniHSpwQyz2mLE8Y+F7y4L2IkAE614mEAc9I5unm6t+DkoQ9YpG1Z29nuQmEWDUjTJXcixJkzf4ODySyoaNmI4wXPNWI5QOixFqw8dLastfXVUsFTVXvHdMm1GrIsrRcRWFMkqtwnlx4V8cT4piXT1O4MLtMa+DGGB4EhjjQ/bMaRB3GtDXbwoGp5rB8pJjt2VbT8U6qo/amcPPHEW17UcRlOpIJ9h6seocWE3qQZ9zglzG7AcyYPvnArsHhTbIkJVo8cj8/KmZnmL1MYbN67mqar3/mfRu9z//FHmg==",
+  "bound_response": "BAQEBAQEBAQEBAQEdpTvjLfNzVjRJ535rzjAo89Kt0B1OJzpLcfp1taXNcgMgG9XGzVxZoMKFMCgK5GdSUR3yW9U2cBeI8mmJ5HU7PSbX1Cz1F+XB3mUDpJCyft3Fwyh/9YK43ZMEjd113soCzScthDGO8uMKTJC3tvyuep8eNS+oETSVnKtTp6NB2lBv/2q9doVFBJ81jg5muCv2pttkPuGgf27zErfF69HL+vNwXUlVZp+thvoyRO9X8Ievf2F17wMv1xKpPOpCUqkHvTIwdMzwXzmwPQ+Aq+94IFmljMS9ELEfqKh8tDBqNU/b4/9aPsy2JGxNCfVcVYYwf4XHBYQDlqHw2/8Jjhd0z1LDb9ql61film/x2Nc4ZudYZUaTbqCtFJsiVy+IUXJkjrVmpRQ/REN6PD/Z6XuMAbSRyVWftNkxxd26Ike3L5l7RLTDqcTK/XzrA=="
+ }
+}

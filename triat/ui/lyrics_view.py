@@ -16,6 +16,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
 from gi.repository import Adw, GLib, Gtk
+from ..i18n import _
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class LyricsView(Gtk.Box):
         square.set_size_request(6, 6)
         square.set_valign(Gtk.Align.CENTER)
         header.append(square)
-        self._title = Gtk.Label(label="paroles", xalign=0)
+        self._title = Gtk.Label(label=_("paroles"), xalign=0)
         self._title.add_css_class("triat-display")
         self._title.add_css_class("section")
         header.append(self._title)
@@ -70,7 +71,7 @@ class LyricsView(Gtk.Box):
         self._message.add_css_class("triat-dim")
         self._lines_box.append(self._message)
 
-        self._retry = Gtk.Button(label="Réessayer", halign=Gtk.Align.START)
+        self._retry = Gtk.Button(label=_("Réessayer"), halign=Gtk.Align.START)
         self._retry.add_css_class("pill")
         self._retry.set_visible(False)
         self._retry.connect("clicked", self._on_retry)
@@ -93,7 +94,10 @@ class LyricsView(Gtk.Box):
         if ref is None:
             self._show_message("")
             return
-        self._show_message("Recherche des paroles…")
+        if ref.source == "soundcloud":
+            self._show_message(_("Paroles non proposées pour SoundCloud"))
+            return
+        self._show_message(_("Recherche des paroles…"))
         threading.Thread(target=self._load, args=(ref, token),
                          daemon=True).start()
 
@@ -115,19 +119,19 @@ class LyricsView(Gtk.Box):
         self._clear()
 
         if lyrics.instrumental:
-            self._show_message("Morceau instrumental.")
+            self._show_message(_("Morceau instrumental."))
         elif lyrics.lines:
             self._source.set_text(lyrics.source)
             for _stamp, text in lyrics.lines:
                 self._lines_box.append(self._make_line(text))
         elif lyrics.plain:
             # Sans horodatage, on affiche le texte sans le suivre.
-            self._source.set_text(f"{lyrics.source}, non synchronisé")
+            self._source.set_text(_("{source}, non synchronisé").format(source=lyrics.source))
             for text in lyrics.plain.splitlines():
                 self._lines_box.append(self._make_line(text))
         else:
             self._show_message(
-                "Paroles indisponibles pour cette piste.")
+                _("Paroles indisponibles pour cette piste."))
         return GLib.SOURCE_REMOVE
 
     def _show_error(self, token: int) -> bool:
@@ -135,7 +139,7 @@ class LyricsView(Gtk.Box):
         if token != self._token:
             return GLib.SOURCE_REMOVE
         self._clear()
-        self._show_message("Paroles indisponibles hors ligne")
+        self._show_message(_("Paroles indisponibles hors ligne"))
         self._retry.set_visible(True)
         return GLib.SOURCE_REMOVE
 

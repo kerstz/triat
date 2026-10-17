@@ -216,3 +216,61 @@ def test_network_failure_is_not_cached_as_no_lyrics(tmp_path):
         count = lib._db.execute("SELECT COUNT(*) FROM lyrics").fetchone()[0]
     assert count == 0
     lib.close()
+
+
+def _count_rows(lib):
+    with lib._lock:
+        return lib._db.execute("SELECT COUNT(*) FROM lyrics").fetchone()[0]
+
+
+def test_private_session_writes_no_lyrics(tmp_path, monkeypatch):
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response(
+        json.dumps({"syncedLyrics": _lrc("Ligne"), "plainLyrics": "",
+                    "instrumental": False}).encode()))
+    library = Library(tmp_path / "l.db")
+    service = LyricsService(library, is_private=lambda: True)
+    for i in "pqr":
+        assert service.fetch(TrackRef(i * 11, "Titre", "Artiste", 120.0)).available
+    assert _count_rows(library) == 0
+    library.close()
+
+
+def test_concurrent_fetches_are_merged(tmp_path, monkeypatch):
+    import threading
+
+    library = Library(tmp_path / "l.db")
+    service = LyricsService(library)
+    started, release = threading.Event(), threading.Event()
+    calls = {"n": 0}
+
+    def slow_call(path, params):
+        calls["n"] += 1
+        started.set()
+        release.wait(5)
+        return {"syncedLyrics": _lrc("Ligne"), "plainLyrics": "", "instrumental": False}
+
+    service._call = slow_call
+    ref = TrackRef("s" * 11, "Titre", "Artiste", 120.0)
+    results = []
+    first = threading.Thread(target=lambda: results.append(service.fetch(ref)))
+    first.start()
+    assert started.wait(5)
+    second = threading.Thread(target=lambda: results.append(service.fetch(ref)))
+    second.start()
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert calls["n"] == 1, "un seul appel LRCLIB"
+    assert len(results) == 2 and all(r.available for r in results)
+    library.close()
+
+
+def test_soundcloud_id_has_no_lyrics_nor_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **k: pytest.fail("aucun réseau attendu"))
+    library = Library(tmp_path / "l.db")
+    result = LyricsService(library).fetch(
+        TrackRef("soundcloud:tracks:42", "Titre", "Artiste", 120.0))
+    assert not result.available
+    assert _count_rows(library) == 0
+    library.close()

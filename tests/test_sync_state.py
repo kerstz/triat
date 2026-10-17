@@ -99,6 +99,9 @@ def test_invalid_tracks_are_ignored():
     assert ss.track_from_wire({"id": "local:/sdcard/x.mp3"}) is None
     assert ss.track_from_wire({"id": 12}) is None
     assert ss.track_from_wire({"id": "a" * 11}).title == ""
+    for bad in ("soundcloud:t", "sc:12345678", "abc def ghi", "abcdefghij!"):
+        assert ss.track_from_wire({"id": bad}) is None
+    assert ss.track_from_wire({"id": "A-b_c9XyZ01"}) is not None
 
 
 def test_tombstone_keeps_author_date(tmp_path):
@@ -144,3 +147,134 @@ def test_sanitize_rejects_bad_shape_and_drops_bad_items():
                          "likes": [{"id": "a", "at": "7"}], "history": None or []})
     assert [p["uid"] for p in clean["playlists"]] == ["x"]
     assert clean["playlists"][0]["updated"] == 0 and clean["likes"][0]["at"] == 7
+
+
+# ---- P2-4 : horodatages bornés ----------------------------------------------
+
+NOW = 1_800_000_000_000
+YEAR_2100 = 4_102_444_800_000
+
+
+def test_sanitize_caps_future_stamps_and_truncates_names():
+    clean = ss.sanitize(
+        {"v": 1,
+         "playlists": [{"uid": "u", "name": "n" * 500, "updated": YEAR_2100,
+                        "deleted": True}],
+         "likes": [{"id": "a", "at": YEAR_2100, "liked": False}],
+         "history": [{"id": "b", "at": NOW - 5}]}, now_ms=NOW)
+    ceiling = NOW + ss.FUTURE_SLACK_MS
+    assert clean["playlists"][0]["updated"] == ceiling
+    assert clean["likes"][0]["at"] == ceiling
+    assert clean["history"][0]["at"] == NOW - 5          # le passé ne bouge pas
+    assert len(clean["playlists"][0]["name"]) == 200
+
+
+def test_future_playlist_no_longer_wins_forever(tmp_path):
+    lib = Library(tmp_path / "a.db")
+    lib.create_playlist("Local", uid="u1")
+    pid = lib.list_playlists()[0]["id"]
+    now_ms = int(time.time() * 1000)
+    remote = ss.sanitize({"v": 1, "likes": [], "history": [],
+                          "playlists": [{"uid": "u1", "name": "Pirate",
+                                         "updated": YEAR_2100, "deleted": False,
+                                         "tracks": []}]})
+    ss.apply(lib, ss.merge(ss.snapshot(lib), remote))
+    assert lib.list_playlists()[0]["name"] == "Pirate"
+    # Une édition locale ultérieure (après la fenêtre tolérée) reprend la main.
+    lib.rename_playlist(pid, "Légitime")
+    lib.set_playlist_updated(pid, (now_ms + ss.FUTURE_SLACK_MS) / 1000 + 60)
+    remote2 = ss.sanitize({"v": 1, "likes": [], "history": [],
+                           "playlists": [{"uid": "u1", "name": "Pirate 2",
+                                          "updated": YEAR_2100, "deleted": False,
+                                          "tracks": []}]})
+    ss.apply(lib, ss.merge(ss.snapshot(lib), remote2))
+    assert lib.list_playlists()[0]["name"] == "Légitime"
+    lib.close()
+
+
+def test_future_tombstone_is_brought_back_and_prunable(tmp_path):
+    lib = Library(tmp_path / "a.db")
+    remote = ss.sanitize({"v": 1, "likes": [], "history": [],
+                          "playlists": [{"uid": "u9", "name": "", "updated": YEAR_2100,
+                                         "deleted": True, "tracks": []}]})
+    ss.apply(lib, ss.merge(ss.snapshot(lib), remote))
+    at = lib.tombstones("playlist")["u9"]
+    assert at < time.time() + ss.FUTURE_SLACK_MS / 1000 + 5
+    # Élaguable : une fois la limite de conservation passée, elle disparaît.
+    assert lib.prune_tombstones(-3600) >= 1
+    assert lib.tombstones("playlist") == {}
+    lib.close()
+
+
+# ---- SoundCloud : jamais envoyé, toujours préservé ---------------------------
+
+SC = "soundcloud:tracks:123"
+
+
+def sc_ref() -> TrackRef:
+    return TrackRef(SC, "Titre SC", "Artiste SC", 90.0)
+
+
+def test_snapshot_never_contains_soundcloud(tmp_path):
+    lib = Library(tmp_path / "a.db")
+    pid = lib.create_playlist("Mixte")
+    lib.add_to_playlist(pid, [ref(1), sc_ref()])
+    lib.set_favorite(sc_ref(), True)
+    lib.set_favorite(ref(2), True)
+    lib.record_play(sc_ref(), 30, True)
+    lib.record_play(ref(1), 30, True)
+    lib.record_tombstone("like", "soundcloud:tracks:1", 1_700_000_000.0)
+    lib.record_tombstone("like", ref(3).video_id, 1_700_000_000.0)
+    snap = ss.snapshot(lib)
+    assert "soundcloud" not in repr(snap)
+    assert [t["id"] for t in snap["playlists"][0]["tracks"]] == [ref(1).video_id]
+    assert {x["id"] for x in snap["likes"]} == {ref(2).video_id, ref(3).video_id}
+    assert [h["id"] for h in snap["history"]] == [ref(1).video_id]
+    lib.close()
+
+
+def test_spec_loss_scenario_soundcloud_track_stays_at_its_index(tmp_path):
+    """Spec 4.9 : le bureau ajoute un titre SC, le téléphone (qui ne le voit
+    pas) réordonne la playlist plus tard et gagne : la piste SC reste."""
+    desktop, phone = Library(tmp_path / "d.db"), Library(tmp_path / "p.db")
+    pid = desktop.create_playlist("P", uid="u1")
+    desktop.add_to_playlist(pid, [ref(1), ref(2), ref(3)])
+    sync(desktop, phone)
+    desktop.upsert_track(sc_ref())
+    desktop.add_to_playlist(pid, [sc_ref()])
+    desktop.set_playlist_order(pid, [ref(1).video_id, SC, ref(2).video_id, ref(3).video_id])
+    time.sleep(0.01)
+    ppid = phone.list_playlists()[0]["id"]
+    phone.set_playlist_order(ppid, [ref(3).video_id, ref(1).video_id, ref(2).video_id])
+    merged = ss.merge(ss.snapshot(desktop), ss.snapshot(phone))
+    assert merged == ss.merge(ss.snapshot(phone), ss.snapshot(desktop))   # commutatif
+    ss.apply(desktop, merged)
+    ss.apply(phone, merged)
+    assert [r.video_id for r in desktop.playlist_items(pid)] == [
+        ref(3).video_id, SC, ref(1).video_id, ref(2).video_id]
+    # Le téléphone n'a jamais reçu la piste SC.
+    assert SC not in [r.video_id for r in phone.playlist_items(ppid)]
+    # Idempotent : une seconde application ne change plus rien.
+    assert ss.apply(desktop, merged) == {"playlists": 0, "likes": 0, "history": 0}
+    desktop.close(); phone.close()
+
+
+def test_soundcloud_index_clamped_when_remote_is_shorter(tmp_path):
+    lib = Library(tmp_path / "a.db")
+    pid = lib.create_playlist("P", uid="u1")
+    lib.add_to_playlist(pid, [ref(1), ref(2), ref(3), sc_ref()])
+    ss.apply(lib, {"playlists": [{"uid": "u1", "name": "P",
+                                  "updated": int((time.time() + 100) * 1000),
+                                  "deleted": False,
+                                  "tracks": [ss.track_to_wire(ref(1))]}]})
+    assert [r.video_id for r in lib.playlist_items(pid)] == [ref(1).video_id, SC]
+    lib.close()
+
+
+def test_remote_cannot_unlike_a_soundcloud_favorite(tmp_path):
+    lib = Library(tmp_path / "a.db")
+    lib.set_favorite(sc_ref(), True)
+    ss.apply(lib, {"likes": [{"id": SC, "at": int((time.time() + 100) * 1000),
+                              "liked": False, "track": None}]})
+    assert [r.video_id for r in lib.list_favorites()] == [SC]
+    lib.close()

@@ -1,0 +1,43 @@
+{
+  "collection": [
+    {
+      "kind": "track",
+      "id": 4003,
+      "urn": "soundcloud:tracks:4003",
+      "title": "Piste 4003",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH4003",
+      "permalink_url": "https://soundcloud.com/artiste-page/titre-4003",
+      "artwork_url": "https://i1.sndcdn.com/artworks-4003-large.jpg",
+      "publisher_metadata": null,
+      "user": {
+        "id": 4903,
+        "username": "Artiste Page",
+        "permalink_url": "https://soundcloud.com/artiste page",
+        "avatar_url": "https://i1.sndcdn.com/avatars-4003-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:4003/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    }
+  ],
+  "next_href": null,
+  "query_urn": null
+}

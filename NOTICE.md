@@ -44,3 +44,18 @@ Doto, Geist and Geist Mono, under the SIL Open Font License 1.1
 | [LRCLIB](https://lrclib.net) | Synced lyrics | See lrclib.net |
 | [ListenBrainz](https://listenbrainz.org) | Optional scrobbling | See listenbrainz.org |
 | YouTube / YouTube Music | Search and playback | YouTube Terms of Service. Triat is not affiliated with Google LLC. |
+
+## SoundCloud
+
+- « SoundCloud » est cité à titre descriptif. Triat n'a aucune affiliation
+  avec SoundCloud et n'est ni approuvé ni soutenu par lui.
+- La prise en charge est **expérimentale** et **désactivée par défaut**. Elle
+  s'active dans Réglages › Lecture › Sources, après un avertissement.
+- Elle utilise l'API web non documentée de SoundCloud. L'identifiant client
+  est découvert à l'exécution et n'est jamais stocké dans le dépôt.
+- Triat ne télécharge rien. Aucun contenu chiffré (DRM) n'est demandé ni lu,
+  et les extraits Go+ ne sont pas lus.
+- Les pochettes SoundCloud ne vont pas dans le cache disque : des fichiers
+  temporaires privés, effacés à la fermeture, servent pendant la session.
+- Les pistes SoundCloud ne sont jamais synchronisées avec Android.
+- Source : `docs/review/SPEC-SOUNDCLOUD-DESKTOP.md`, §7.

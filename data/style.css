@@ -2,7 +2,7 @@
    Triat — feuille GTK4 / libadwaita
    Refonte du 2026-09-24 : Triat parle la langue du bureau Nothing OS
    (Hyprland + dotfiles Nothing OS), relevée dans Quickshell/Theme.qml et
-   hypr/hyprland/general.lua. Voir design/REFONTE.md.
+   hypr/hyprland/general.lua. Voir design/SIGNAL.md ; tokens : design/tokens.json.
 
    - Noir translucide, comme kitty (0.88) : le flou léger d'Hyprland
      (brightness .75) décolle la fenêtre du fond d'écran.
@@ -11,54 +11,127 @@
      jamais un rayon (règle de Theme.qml).
    - Inter pour le texte, JetBrains Mono pour les durées, comme le shell.
      Doto seulement pour le logo : la trame en points des pochettes suffit.
-   - Rouge #d71921 = « en lecture », le rouge de la bordure de fenêtre
+   - Rouge (signal) = « en direct », le rouge de la bordure de fenêtre
      active. L'accent du bureau (souvent blanc) marque la sélection.
 
    Rappel GTK CSS : pas de gap, pas de grid, pas d'aspect-ratio.
    ========================================================================== */
 
 /* --- 1. Tokens ----------------------------------------------------------- */
+/* Les valeurs viennent de design/tokens.json (tools/gen_tokens.py) : aucune
+   couleur en dur ailleurs dans cette feuille. Custom properties : GTK >= 4.16. */
+/* BEGIN GENERATED TOKENS */
+/* Genere par tools/gen_tokens.py depuis design/tokens.json : ne pas editer. */
 :root {
-  --triat-void: rgba(0, 0, 0, 0.88);       /* fond de fenêtre */
-  --triat-void-solid: #050505;             /* feuilles superposées */
-  --triat-veil-1: rgba(255, 255, 255, 0.035);
+  --triat-ground: #000000;
+  --triat-ground-solid: #050505;
+  --triat-ground-glass: rgba(0, 0, 0, 0.88);
+  --triat-ground-glass-solid: #000000;
+  --triat-veil-1: rgba(255, 255, 255, 0.04);
+  --triat-veil-1-solid: #0a0a0a;
   --triat-veil-2: rgba(255, 255, 255, 0.07);
+  --triat-veil-2-solid: #121212;
   --triat-veil-3: rgba(255, 255, 255, 0.11);
+  --triat-veil-3-solid: #1c1c1c;
   --triat-veil-4: rgba(255, 255, 255, 0.16);
-  --triat-hair: rgba(255, 255, 255, 0.07); /* filets */
-  --triat-ink: #f2f2f2;
-  --triat-dim: #8a8a8a;                    /* onDim du shell */
-  --triat-faint: #454545;                  /* onFaint du shell */
-  --triat-live: #d71921;                   /* bordure active Hyprland */
-  --triat-accent: #d71921;                 /* réécrit : accent du bureau */
-  --triat-radius: 4px;
-  --triat-radius-art: 6px;
-  --triat-black: #000000;                  /* texte sur surface claire */
-  --triat-raised: #161616;                 /* popovers, toasts : un seul noir « surélevé » */
-  --triat-dialog: #0c0c0c;                 /* dialogues et feuilles */
-  --triat-bar: rgba(8, 8, 8, 0.72);        /* bandeau de lecture */
-  --triat-danger: #ff6b6b;                 /* action destructive (≥ 4.5:1 sur noir) */
-  --triat-lyric-dim: #6b6b6b;              /* paroles lointaines (≥ 3:1, grand texte) */
+  --triat-veil-4-solid: #292929;
+  --triat-hair: rgba(255, 255, 255, 0.08);
+  --triat-hair-solid: #141414;
+  --triat-bar: rgba(8, 8, 8, 0.72);
+  --triat-bar-solid: #080808;
+  --triat-scrim: rgba(0, 0, 0, 0.55);
+  --triat-scrim-solid: #000000;
+  --triat-scrim-2: rgba(0, 0, 0, 0.62);
+  --triat-scrim-2-solid: #000000;
+  --triat-shadow: rgba(0, 0, 0, 0.5);
+  --triat-shadow-solid: #000000;
+  --triat-ink-max: #FFFFFF;
+  --triat-ink: #F2F2F2;
+  --triat-ink-2: #B3B3B3;
+  --triat-ink-3: #8C8C8C;
+  --triat-ink-4: #6B6B6B;
+  --triat-dot-off: #2A2A2A;
+  --triat-disabled: #5A5A5A;
+  --triat-signal: #D71921;
+  --triat-signal-ink: #FF4D55;
+  --triat-select-bg: #FFFFFF;
+  --triat-select-fg: #000000;
+  --triat-danger: #FF6B6B;
+  --triat-danger-soft: rgba(255, 107, 107, 0.16);
+  --triat-danger-soft-solid: #2a1213;
+  --triat-ok: #4FD18B;
+  --triat-focus: #FFFFFF;
+  --triat-font-display: "Doto";
+  --triat-font-text: "Geist";
+  --triat-font-mono: "Geist Mono";
+  --triat-display-xl-size: 56px;
+  --triat-display-xl-weight: 800;
+  --triat-display-xl-line: 1;
+  --triat-display-l-size: 36px;
+  --triat-display-l-weight: 800;
+  --triat-display-l-line: 1.05;
+  --triat-display-m-size: 24px;
+  --triat-display-m-weight: 700;
+  --triat-display-m-line: 1.1;
+  --triat-title-l-size: 22px;
+  --triat-title-l-weight: 600;
+  --triat-title-l-line: 1.2;
+  --triat-title-m-size: 17px;
+  --triat-title-m-weight: 600;
+  --triat-title-m-line: 1.25;
+  --triat-title-s-size: 15px;
+  --triat-title-s-weight: 600;
+  --triat-title-s-line: 1.3;
+  --triat-body-size: 14px;
+  --triat-body-weight: 400;
+  --triat-body-line: 1.45;
+  --triat-body-s-size: 13px;
+  --triat-body-s-weight: 400;
+  --triat-body-s-line: 1.4;
+  --triat-meta-size: 12px;
+  --triat-meta-weight: 500;
+  --triat-meta-line: 1.3;
+  --triat-mono-size: 12px;
+  --triat-mono-weight: 400;
+  --triat-mono-line: 1.2;
+  --triat-mono-s-size: 11px;
+  --triat-mono-s-weight: 500;
+  --triat-mono-s-line: 1.2;
+  --triat-s1: 4px;
+  --triat-s2: 8px;
+  --triat-s3: 12px;
+  --triat-s4: 16px;
+  --triat-s5: 24px;
+  --triat-s6: 32px;
+  --triat-s7: 48px;
+  --triat-s8: 64px;
+  --triat-r-panel: 4px;
+  --triat-r-art-s: 4px;
+  --triat-r-art-l: 6px;
+  --triat-r-sheet: 12px;
+  --triat-r-pill: 999px;
+  --triat-t-fast: 120ms;
+  --triat-t-fast-curve: ease-out;
+  --triat-t-base: 200ms;
+  --triat-t-base-curve: ease-out;
+  --triat-t-page: 280ms;
+  --triat-t-page-curve: cubic-bezier(0.2, 0, 0, 1);
+  --triat-t-art: 360ms;
+  --triat-t-art-curve: ease-in-out;
+}
+/* END GENERATED TOKENS */
 
-  /* Anciens noms, lus par du code ou des feuilles d'appoint. */
-  --triat-bg: var(--triat-void-solid);
-  --triat-fg: var(--triat-ink);
-  --triat-fg-max: #ffffff;
-  --triat-fg-1: #d6d6d6;
-  --triat-fg-2: #b3b3b3;
-  --triat-fg-3: var(--triat-dim);
-  --triat-fg-4: #6b6b6b;
-  --triat-fg-disabled: var(--triat-faint);
-  --triat-surface: #111111;
-  --triat-surface-2: #161616;
-  --triat-surface-3: #1f1f1f;
-  --triat-surface-4: #2a2a2a;
-  --triat-line: var(--triat-hair);
-  --triat-line-2: rgba(255, 255, 255, 0.09);
-  --triat-line-3: rgba(255, 255, 255, 0.14);
+/* Alias de compatibilité : lus par le code (désaccord d'accent du bureau,
+   widgets dessinés) ou par des tests. L'accent reste réécrit par
+   core/desktop.py : le rouge « en direct » et l'accent sont deux variables. */
+:root {
+  --triat-live: var(--triat-signal);       /* en direct : jamais la sélection */
+  --triat-accent: var(--triat-signal);     /* réécrit : accent du bureau */
+  --triat-radius: var(--triat-r-panel);
+  --triat-radius-art: var(--triat-r-art-l);
 
   /* libadwaita remappé */
-  --window-bg-color: var(--triat-void-solid);
+  --window-bg-color: var(--triat-ground-solid);
   --window-fg-color: var(--triat-ink);
   --view-bg-color: transparent;
   --view-fg-color: var(--triat-ink);
@@ -71,22 +144,22 @@
   --sidebar-fg-color: var(--triat-ink);
   --card-bg-color: var(--triat-veil-1);
   --card-fg-color: var(--triat-ink);
-  --popover-bg-color: var(--triat-raised);
+  --popover-bg-color: var(--triat-veil-3-solid);
   --popover-fg-color: var(--triat-ink);
-  --dialog-bg-color: var(--triat-dialog);
+  --dialog-bg-color: var(--triat-veil-1-solid);
   --dialog-fg-color: var(--triat-ink);
   --accent-bg-color: var(--triat-accent);
-  --accent-fg-color: var(--triat-black);
+  --accent-fg-color: var(--triat-select-fg);
   --accent-color: var(--triat-ink);
   --border-color: var(--triat-hair);
-  --window-radius: 4px;
+  --window-radius: var(--triat-r-panel);
 }
 
 /* La fenêtre principale est translucide ; ses pages aussi, pour que le
    flou d'Hyprland reste lisible partout. Les feuilles qui se posent
    PAR-DESSUS une page (lecture en cours, dialogues) sont opaques. */
 window.triat-window, window.triat-window.background {
-  background-color: var(--triat-void);
+  background-color: var(--triat-ground-glass);
   color: var(--triat-ink);
 }
 window, .background { color: var(--triat-ink); }
@@ -97,12 +170,12 @@ label, .triat-body, button, entry, text {
   font-feature-settings: "tnum";
 }
 .triat-body { font-size: 13px; color: var(--triat-ink); }
-.triat-dim  { color: var(--triat-dim); font-size: 12px; }
-.triat-label { font-size: 12px; color: var(--triat-dim); }
+.triat-dim  { color: var(--triat-ink-3); font-size: 12px; }
+.triat-label { font-size: 12px; color: var(--triat-ink-3); }
 .triat-label.strong { color: var(--triat-ink); font-weight: 500; }
 .triat-mono {
   font-family: "JetBrains Mono", "JetBrainsMono NF", "Geist Mono", monospace;
-  font-size: 11px; color: var(--triat-dim);
+  font-size: 11px; color: var(--triat-ink-3);
 }
 
 /* Code d'appairage du téléphone : gros, en chasse fixe, groupé 4 + 4. */
@@ -118,7 +191,7 @@ label, .triat-body, button, entry, text {
   font-family: "Inter Display", "Inter", sans-serif;
   font-weight: 600;
   letter-spacing: -0.015em;
-  color: var(--triat-fg-max);
+  color: var(--triat-ink-max);
 }
 .triat-display.xl      { font-size: 34px; }
 .triat-display.lg      { font-size: 28px; }
@@ -141,23 +214,23 @@ label, .triat-body, button, entry, text {
 
 button.triat-nav-item {
   min-height: 36px; padding: 0 12px; border-radius: 999px;
-  background: none; box-shadow: none; color: var(--triat-dim);
+  background: none; box-shadow: none; color: var(--triat-ink-3);
   font-size: 13px; font-weight: 500;
 }
-button.triat-nav-item image { color: var(--triat-dim); }
+button.triat-nav-item image { color: var(--triat-ink-3); }
 button.triat-nav-item:hover { background-color: var(--triat-veil-2); color: var(--triat-ink); }
 button.triat-nav-item:hover image { color: var(--triat-ink); }
-button.triat-nav-item.active { background-color: var(--triat-ink); color: var(--triat-black); }
-button.triat-nav-item.active image, button.triat-nav-item.active label { color: var(--triat-black); }
+button.triat-nav-item.active { background-color: var(--triat-ink); color: var(--triat-select-fg); }
+button.triat-nav-item.active image, button.triat-nav-item.active label { color: var(--triat-select-fg); }
 .triat-sidebar.compact button.triat-nav-item { min-width: 40px; min-height: 40px; padding: 0; }
 
-.triat-sidebar .triat-side-heading { font-size: 11px; color: var(--triat-dim); font-weight: 500; }
+.triat-sidebar .triat-side-heading { font-size: 11px; color: var(--triat-ink-3); font-weight: 500; }
 button.triat-side-playlist {
   min-height: 30px; padding: 0 12px; border-radius: 999px;
-  background: none; box-shadow: none; color: var(--triat-dim); font-size: 12px;
+  background: none; box-shadow: none; color: var(--triat-ink-3); font-size: 12px;
 }
 button.triat-side-playlist:hover { background-color: var(--triat-veil-2); color: var(--triat-ink); }
-button.triat-side-playlist .triat-mono { color: var(--triat-dim); }
+button.triat-side-playlist .triat-mono { color: var(--triat-ink-3); }
 
 .triat-content { padding: 22px 28px 0; background: none; }
 .triat-content.narrow { padding: 18px 20px 0; }
@@ -170,10 +243,10 @@ button.triat-side-playlist .triat-mono { color: var(--triat-dim); }
   min-height: 72px; padding: 0 14px 0 12px;
   margin: 0; border-radius: 0;
 }
-.triat-player-bar .triat-expand { border-radius: var(--triat-radius); padding: 4px; }
+.triat-player-bar .triat-expand { border-radius: var(--triat-r-panel); padding: 4px; }
 .triat-player-bar .triat-expand:hover { background-color: var(--triat-veil-2); }
-.triat-player-bar .now-title { font-size: 13px; font-weight: 500; color: var(--triat-fg-max); }
-.triat-player-bar .now-artist { font-size: 12px; color: var(--triat-dim); }
+.triat-player-bar .now-title { font-size: 13px; font-weight: 500; color: var(--triat-ink-max); }
+.triat-player-bar .now-artist { font-size: 12px; color: var(--triat-ink-3); }
 
 /* Point « en lecture » : le rouge de la bordure active d'Hyprland. */
 .triat-accent-dot {
@@ -188,65 +261,67 @@ button.triat-side-playlist .triat-mono { color: var(--triat-dim); }
 /* --- 4. Surfaces --------------------------------------------------------- */
 .triat-card {
   background-color: var(--triat-veil-1);
-  border: none; border-radius: var(--triat-radius);
+  border: none; border-radius: var(--triat-r-panel);
   padding: 14px 16px; box-shadow: none;
 }
 .triat-tile, button.triat-tile {
   background-color: var(--triat-veil-1);
-  border-radius: var(--triat-radius);
+  border-radius: var(--triat-r-panel);
   padding: 14px; color: var(--triat-ink);
   box-shadow: none; min-height: 0;
 }
 button.triat-tile:hover  { background-color: var(--triat-veil-2); }
 button.triat-tile:active { background-color: var(--triat-veil-3); }
 .triat-tile .tile-title  { font-size: 13px; font-weight: 600; }
-.triat-tile .tile-detail { font-size: 12px; color: var(--triat-dim); }
+.triat-tile .tile-detail { font-size: 12px; color: var(--triat-ink-3); }
 .triat-tile .tile-big { font-family: "Inter Display", sans-serif; font-weight: 600; font-size: 22px; }
 
-.triat-cover { border: none; border-radius: var(--triat-radius-art); background-color: var(--triat-veil-2); }
-.triat-cover.small, .triat-cover.tiny { border-radius: var(--triat-radius); }
+.triat-cover { border: none; border-radius: var(--triat-r-art-l); background-color: var(--triat-veil-2); }
+.triat-cover.small, .triat-cover.tiny { border-radius: var(--triat-r-panel); }
 
 /* Trame en points : l'unique signature visuelle. */
-.triat-glyph { color: var(--triat-fg-max); background-color: var(--triat-veil-1); border-radius: var(--triat-radius-art); }
+.triat-glyph { color: var(--triat-ink-max); background-color: var(--triat-veil-1); border-radius: var(--triat-r-art-l); }
 .triat-glyph.round { border-radius: 999px; }
-.triat-glyph.small { border-radius: var(--triat-radius); }
+.triat-glyph.small { border-radius: var(--triat-r-panel); }
 
 /* Vignettes (mixes, artistes, playlists) : pas de cadre, la trame porte. */
 button.triat-mix {
-  background: none; box-shadow: none; border-radius: var(--triat-radius-art);
+  background: none; box-shadow: none; border-radius: var(--triat-r-art-l);
   padding: 6px; min-height: 0;
 }
 button.triat-mix:hover { background-color: var(--triat-veil-1); }
 .triat-mix .mix-name   { font-size: 13px; font-weight: 600; color: var(--triat-ink); }
-.triat-mix .mix-detail { font-size: 12px; color: var(--triat-dim); }
+.triat-mix .mix-detail { font-size: 12px; color: var(--triat-ink-3); }
 
 /* Carte « Meilleur résultat » : la plus grande trame de la recherche. */
 button.triat-best { padding: 18px; }
-.triat-best .triat-display.sm { font-size: 26px; color: var(--triat-fg-max); }
+.triat-best .triat-display.sm { font-size: 26px; color: var(--triat-ink-max); }
 
 /* Badge de type (Artiste, Titre, Playlist) : une pilule discrète. */
 .triat-badge {
   font-size: 11px; font-weight: 500;
   padding: 2px 9px; border-radius: 999px;
-  background-color: var(--triat-veil-2); color: var(--triat-fg-2);
+  background-color: var(--triat-veil-2); color: var(--triat-ink-2);
 }
 
 /* --- 5. Listes ----------------------------------------------------------- */
 .triat-track-list, .triat-track-list row,
 .triat-grid, .triat-playlists { background: none; }
-.triat-track-list row { padding: 0; border-radius: var(--triat-radius); }
+.triat-track-list row { padding: 0; border-radius: var(--triat-r-panel); }
 .triat-track-list row:hover { background-color: var(--triat-veil-1); }
 .triat-track-list row:selected { background-color: var(--triat-veil-2); }
 .triat-track-row { min-height: 46px; padding: 0 10px; }
 .triat-track-row .triat-mono { font-size: 11px; }
-.triat-track-row.playing .title { color: var(--triat-fg-max); font-weight: 600; }
+.triat-track-row.unplayable { opacity: .5; }
+.triat-sleep-countdown { color: var(--triat-ink-max); }
+.triat-track-row.playing .title { color: var(--triat-ink-max); font-weight: 600; }
 
-.triat-grid child { background: none; padding: 6px; border-radius: var(--triat-radius-art); }
+.triat-grid child { background: none; padding: 6px; border-radius: var(--triat-r-art-l); }
 .triat-grid child:hover { background-color: var(--triat-veil-1); }
 .triat-grid child:selected { background-color: var(--triat-veil-2); }
 .triat-grid-item { padding: 0; }
 
-.triat-playlists row { border-radius: var(--triat-radius); margin-bottom: 2px; }
+.triat-playlists row { border-radius: var(--triat-r-panel); margin-bottom: 2px; }
 .triat-playlists row:hover { background-color: var(--triat-veil-1); }
 .triat-playlists row:selected { background-color: var(--triat-veil-2); }
 .triat-playlist-row { padding: 0 10px; }
@@ -263,75 +338,77 @@ button.pill {
 button.pill:hover { background-color: var(--triat-veil-3); }
 button.suggested-action {
   min-height: 34px; padding: 0 16px;
-  background-color: var(--triat-ink); color: var(--triat-black); font-weight: 600;
+  background-color: var(--triat-ink); color: var(--triat-select-fg); font-weight: 600;
 }
-button.suggested-action:hover { background-color: var(--triat-fg-max); }
-button.suggested-action image { color: var(--triat-black); }
+button.suggested-action:hover { background-color: var(--triat-ink-max); }
+button.suggested-action image { color: var(--triat-select-fg); }
 button.destructive-action { background-color: var(--triat-veil-2); color: var(--triat-danger); }
-button.destructive-action:hover { background-color: rgba(215, 25, 33, 0.22); }
+button.destructive-action:hover { background-color: var(--triat-danger-soft); }
 
 button.flat { background: none; }
 button.flat:hover { background-color: var(--triat-veil-2); }
 button.flat.circular {
   min-width: 34px; min-height: 34px; padding: 0; border-radius: 999px;
-  color: var(--triat-fg-1);
+  color: var(--triat-ink-2);
 }
-button.flat.circular:hover { background-color: var(--triat-veil-2); color: var(--triat-fg-max); }
-button.flat.triat-label { color: var(--triat-dim); font-size: 12px; font-weight: 500; min-height: 28px; padding: 0 10px; }
-button.flat.triat-label:hover { color: var(--triat-fg-max); }
+button.flat.circular:hover { background-color: var(--triat-veil-2); color: var(--triat-ink-max); }
+button.flat.triat-label { color: var(--triat-ink-3); font-size: 12px; font-weight: 500; min-height: 28px; padding: 0 10px; }
+button.flat.triat-label:hover { color: var(--triat-ink-max); }
 
 /* Transport : lecture en pastille blanche, le reste en icônes nues. */
 button.triat-play, .triat-player-bar button.suggested-action.circular {
   min-width: 40px; min-height: 40px; padding: 0;
-  background-color: var(--triat-ink); color: var(--triat-black);
+  background-color: var(--triat-ink); color: var(--triat-select-fg);
 }
-.triat-player-bar button.flat image { color: var(--triat-fg-1); }
-.triat-player-bar button.flat:hover image { color: var(--triat-fg-max); }
-.triat-player-bar button:disabled image { color: var(--triat-faint); }
+.triat-player-bar button.flat image { color: var(--triat-ink-2); }
+.triat-player-bar button.flat:hover image { color: var(--triat-ink-max); }
+/* Désactivé : gris lisible (>= 3:1 sur le noir), icône pleine opacité. */
+button:disabled, button:disabled image { color: var(--triat-disabled); opacity: 1; }
 
-button:focus-visible, *:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 1px; }
+/* Anneau de focus clavier : obligatoire sur tout élément focalisable (FocusRing). */
+*:focus-visible { outline: 2px solid var(--triat-focus); outline-offset: 2px; }
 
 /* Puces à choix unique : pilule fine, remplie de blanc quand active. */
 button.triat-chip, .triat-chip, .triat-pill-button {
   min-height: 28px; padding: 0 12px; border-radius: 999px;
-  background: none; border: 1px solid var(--triat-line-2);
-  color: var(--triat-fg-2); font-size: 12px; font-weight: 500;
+  background: none; border: 1px solid var(--triat-veil-3);
+  color: var(--triat-ink-2); font-size: 12px; font-weight: 500;
   font-family: "Inter", sans-serif;
 }
 button.triat-chip:hover, .triat-pill-button:hover {
-  color: var(--triat-fg-max); border-color: var(--triat-line-3); background-color: var(--triat-veil-1);
+  color: var(--triat-ink-max); border-color: var(--triat-veil-4); background-color: var(--triat-veil-1);
 }
 button.triat-chip:checked {
-  background-color: var(--triat-ink); border-color: var(--triat-ink); color: var(--triat-black);
+  background-color: var(--triat-ink); border-color: var(--triat-ink); color: var(--triat-select-fg);
 }
-.triat-chip-dot { min-width: 5px; min-height: 5px; border-radius: 999px; background-color: var(--triat-faint); }
-button.triat-chip:checked .triat-chip-dot { background-color: var(--triat-black); }
+.triat-chip-dot { min-width: 5px; min-height: 5px; border-radius: 999px; background-color: var(--triat-ink-3); }
+button.triat-chip:checked .triat-chip-dot { background-color: var(--triat-select-fg); }
 .triat-chip-dot.synced { background-color: var(--triat-ink); }
 button.triat-chip .triat-chip-dot.policy-skip   { background-color: var(--triat-live); }
-button.triat-chip .triat-chip-dot.policy-ask    { background-color: var(--triat-dim); }
-button.triat-chip .triat-chip-dot.policy-ignore { background-color: var(--triat-faint); }
+button.triat-chip .triat-chip-dot.policy-ask    { background-color: var(--triat-ink-3); }
+button.triat-chip .triat-chip-dot.policy-ignore { background-color: var(--triat-ink-4); }
 
 .triat-pill {
   padding: 5px 12px; border-radius: 999px;
-  background-color: rgba(0, 0, 0, 0.55); border: 1px solid var(--triat-line-2);
+  background-color: var(--triat-scrim); border: 1px solid var(--triat-veil-3);
 }
 
 /* Interrupteur : rail en points, bouton blanc quand actif (Nothing). */
 switch {
   min-width: 44px; min-height: 22px; border-radius: 999px;
-  border: 1px solid var(--triat-line-2);
+  border: 1px solid var(--triat-veil-3);
   background-color: var(--triat-veil-1);
-  background-image: radial-gradient(circle, var(--triat-faint) 1.2px, transparent 1.6px);
+  background-image: radial-gradient(circle, var(--triat-dot-off) 1.2px, transparent 1.6px);
   background-size: 7px 22px; background-repeat: repeat-x; background-position: 5px center;
   box-shadow: none; padding: 0;
 }
-switch:checked { background-color: var(--triat-veil-2); border-color: var(--triat-line-3); }
+switch:checked { background-color: var(--triat-veil-2); border-color: var(--triat-veil-4); }
 switch image { opacity: 0; }
 switch slider {
   min-width: 16px; min-height: 16px; margin: 2px; border-radius: 999px;
-  background-color: var(--triat-faint); box-shadow: none; border: none;
+  background-color: var(--triat-ink-4); box-shadow: none; border: none;
 }
-switch:checked slider { background-color: var(--triat-fg-max); }
+switch:checked slider { background-color: var(--triat-ink-max); }
 
 /* Champs */
 entry, searchentry {
@@ -340,22 +417,22 @@ entry, searchentry {
   color: var(--triat-ink); box-shadow: none; outline: none;
 }
 entry:focus-within, searchentry:focus-within {
-  border-color: var(--triat-line-3); background-color: var(--triat-veil-3);
+  border-color: var(--triat-focus); background-color: var(--triat-veil-3);
 }
-searchentry image { color: var(--triat-dim); }
+searchentry image { color: var(--triat-ink-3); }
 
 /* Toasts : une pilule, comme les notifications du shell. */
 toast {
-  border-radius: 999px; background-color: var(--triat-raised); color: var(--triat-ink);
-  border: 1px solid var(--triat-line-2); padding: 3px 5px 3px 16px;
+  border-radius: 999px; background-color: var(--triat-veil-3-solid); color: var(--triat-ink);
+  border: 1px solid var(--triat-veil-3); padding: 3px 5px 3px 16px;
 }
-toast button { background-color: var(--triat-ink); color: var(--triat-black); font-weight: 600; }
+toast button { background-color: var(--triat-ink); color: var(--triat-select-fg); font-weight: 600; }
 
 popover > contents, popover.menu > contents {
-  border-radius: 6px; background-color: var(--triat-raised);
-  border: 1px solid var(--triat-line-2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  border-radius: 6px; background-color: var(--triat-veil-3-solid);
+  border: 1px solid var(--triat-veil-3); box-shadow: 0 8px 24px var(--triat-shadow);
 }
-popover modelbutton { border-radius: var(--triat-radius); min-height: 30px; }
+popover modelbutton { border-radius: var(--triat-r-panel); min-height: 30px; }
 popover modelbutton:hover { background-color: var(--triat-veil-2); }
 
 scrollbar slider { background-color: var(--triat-veil-3); border-radius: 999px; min-width: 4px; }
@@ -367,79 +444,79 @@ scrollbar slider:hover { background-color: var(--triat-veil-4); }
 .triat-progress  { color: var(--triat-live); min-height: 10px; }
 .triat-volume    { color: var(--triat-ink); min-height: 10px; }
 .triat-dotfield  {
-  color: #2a2a2a;
-  background-image: radial-gradient(circle, rgba(255,255,255,0.08) 1.1px, transparent 1.5px);
+  color: var(--triat-dot-off);
+  background-image: radial-gradient(circle, var(--triat-hair) 1.1px, transparent 1.5px);
   background-size: 12px 12px;
 }
 
 /* --- 8. Lecture en cours (feuille opaque par-dessus les pages) ---------- */
-.triat-nowplaying { background-color: var(--triat-void-solid); }
-.triat-lyric         { font-family: "Inter Display", sans-serif; font-size: 24px; font-weight: 600; color: var(--triat-lyric-dim); }
-.triat-lyric.near    { color: var(--triat-fg-2); }
-.triat-lyric.current { font-size: 30px; color: var(--triat-fg-max); }
+.triat-nowplaying { background-color: var(--triat-ground-solid); }
+.triat-lyric         { font-family: "Inter Display", sans-serif; font-size: 24px; font-weight: 600; color: var(--triat-ink-4); }
+.triat-lyric.near    { color: var(--triat-ink-2); }
+.triat-lyric.current { font-size: 30px; color: var(--triat-ink-max); }
 
 /* --- 9. Bibliothèque, recherche ----------------------------------------- */
 .triat-smart .tile-title { font-size: 14px; }
 .triat-smart .tile-detail { font-family: "JetBrains Mono", monospace; font-size: 11px; }
 
 /* --- 10. Réglages (Adw.PreferencesDialog) -------------------------------- */
-dialog > .dialog-contents, floating-sheet > sheet { background-color: var(--triat-dialog); }
+dialog > .dialog-contents, floating-sheet > sheet { background-color: var(--triat-veil-1-solid); }
 preferencespage, preferencesgroup { background: none; }
 preferencesgroup > box > label.title, preferencesgroup .heading {
   font-family: "Inter Display", "Inter", sans-serif;
-  font-size: 15px; font-weight: 600; letter-spacing: -0.005em; color: var(--triat-fg-max);
+  font-size: 15px; font-weight: 600; letter-spacing: -0.005em; color: var(--triat-ink-max);
 }
-preferencesgroup > box > label.description, preferencesgroup .dim-label { color: var(--triat-dim); font-size: 12px; }
+preferencesgroup > box > label.description, preferencesgroup .dim-label { color: var(--triat-ink-3); font-size: 12px; }
 preferencesgroup > box > .boxed-list, list.boxed-list {
   background: none; box-shadow: none; border: none;
 }
 list.boxed-list > row, preferencesgroup > box > .boxed-list > row {
   background-color: var(--triat-veil-1); border: none;
-  border-radius: var(--triat-radius); margin-bottom: 2px; min-height: 50px;
+  border-radius: var(--triat-r-panel); margin-bottom: 2px; min-height: 50px;
 }
 list.boxed-list > row:hover { background-color: var(--triat-veil-2); }
 row .title { font-size: 13px; }
-row .subtitle { font-size: 12px; color: var(--triat-dim); }
+row .subtitle { font-size: 12px; color: var(--triat-ink-3); }
 viewswitcher button, .view-switcher button { border-radius: 999px; }
 viewswitcher button:checked { background-color: var(--triat-veil-2); }
 .triat-chips button { min-height: 28px; padding: 0 12px; }
 
 /* --- 11. Égaliseur ------------------------------------------------------- */
 .triat-eq scale trough { min-width: 3px; background-color: var(--triat-veil-3); border-radius: 999px; }
-.triat-eq scale highlight { min-width: 3px; background-color: var(--triat-fg-2); border-radius: 999px; }
-.triat-eq scale slider { min-width: 12px; min-height: 12px; margin: -5px; background-color: var(--triat-fg-max); box-shadow: none; }
+.triat-eq scale highlight { min-width: 3px; background-color: var(--triat-ink-2); border-radius: 999px; }
+.triat-eq scale slider { min-width: 12px; min-height: 12px; margin: -5px; background-color: var(--triat-ink-max); box-shadow: none; }
 
 /* --- 12. Mini-lecteur, bienvenue ---------------------------------------- */
-.triat-mini { background-color: var(--triat-void); border-radius: 6px; }
+.triat-mini { background-color: var(--triat-ground-glass); border-radius: 6px; }
 .triat-mini windowhandle { border-radius: 6px; }
-.triat-onboarding { background-color: var(--triat-void-solid); }
+.triat-onboarding { background-color: var(--triat-ground-solid); }
 .triat-onboarding .triat-card { padding: 24px; border-radius: 6px; }
 
 /* --- 13. Immersion ------------------------------------------------------- */
 /* Calque de la matrice : noir plein pour masquer le clip derrière ; la
    scène « clip » le rend transparent par son opacité (jamais par
    `visibility`, qui perturbe la GLArea). */
-.triat-glyph-layer { background-color: var(--triat-black); }
-.triat-immersion { background-color: var(--triat-black); }
-.triat-video-frame { border-radius: 6px; background-color: var(--triat-black); }
-.triat-video-placeholder { background-color: var(--triat-black); }
+.triat-glyph-layer { background-color: var(--triat-select-fg); }
+.triat-immersion { background-color: var(--triat-select-fg); }
+.triat-video-frame { border-radius: 6px; background-color: var(--triat-select-fg); }
+.triat-video-placeholder { background-color: var(--triat-select-fg); }
 .triat-immersion .immersion-title { font-family: "Inter Display", sans-serif; font-size: 28px; font-weight: 600; }
 .triat-immersion-top, .triat-immersion-bottom, .triat-immersion-hint { transition: opacity 400ms ease; }
 .triat-concealed { opacity: 0; }
-.triat-immersion-prev { font-size: 17px; color: var(--triat-dim); }
-.triat-immersion-line { padding: 8px 20px; border-radius: 999px; background-color: rgba(0, 0, 0, 0.62); }
-.triat-immersion-line label { font-family: "Inter Display", sans-serif; font-size: 32px; font-weight: 600; color: var(--triat-fg-max); }
+.triat-immersion-prev { font-size: 17px; color: var(--triat-ink-3); }
+.triat-immersion-line { padding: 8px 20px; border-radius: 999px; background-color: var(--triat-scrim-2); }
+.triat-immersion-line label { font-family: "Inter Display", sans-serif; font-size: 32px; font-weight: 600; color: var(--triat-ink-max); }
 
 /* --- 14. Monochrome strict ----------------------------------------------
    Le thème d'icônes du système est coloré : toute icône prend la couleur
    du texte. */
 image { color: inherit; -gtk-icon-style: symbolic; }
-:selected, selection { background-color: var(--triat-veil-3); color: var(--triat-fg-max); }
+:selected, selection { background-color: var(--triat-veil-3); color: var(--triat-ink-max); }
 
 /* Nom d'artiste cliquable : aligné sur le titre, pas de coussin de bouton. */
 button.triat-link { padding: 0 2px; min-height: 22px; background: none; }
-button.triat-link:hover label { color: var(--triat-fg-max); }
+button.triat-link:hover label { color: var(--triat-ink-max); }
 .triat-display.nav.hero { font-size: 56px; }
 
 /* Le QR doit rester blanc franc pour être lu : seul le rayon est aligné. */
-.triat-pair-qr { background: #ffffff; border-radius: 6px; }
+.triat-pair-qr { background: var(--triat-ink-max); border-radius: 6px; }

@@ -51,6 +51,40 @@ def setup(level: int = logging.INFO, to_file: bool = True) -> None:
     _install_hooks()
 
 
+def truncate() -> None:
+    """Vide triat.log et ses rotations (.1, .2, …).
+
+    Le fichier courant est tronqué sur place, pas supprimé : le handler
+    ouvert garde un descripteur valide et continue d'écrire dans le même
+    fichier. Les rotations n'ont pas de descripteur ouvert : supprimées."""
+    path = state_dir() / "triat.log"
+    handlers = [h for h in logging.getLogger().handlers
+                if isinstance(h, logging.handlers.RotatingFileHandler)
+                and os.path.abspath(h.baseFilename) == str(path.absolute())]
+    for handler in handlers:
+        handler.acquire()
+    try:
+        for handler in handlers:
+            handler.flush()
+        try:
+            with open(path, "r+b") as handle:
+                handle.truncate(0)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("Journal non vidé : %s", exc)
+        for rotated in path.parent.glob("triat.log.*"):
+            suffix = rotated.name[len("triat.log."):]
+            if suffix.isdigit() and not rotated.is_symlink():
+                try:
+                    rotated.unlink()
+                except OSError as exc:
+                    log.warning("Rotation non supprimée : %s", exc)
+    finally:
+        for handler in handlers:
+            handler.release()
+
+
 def _install_hooks() -> None:
     previous = sys.excepthook
 

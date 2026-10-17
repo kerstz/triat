@@ -1,0 +1,83 @@
+{
+  "collection": [
+    {
+      "kind": "track",
+      "id": 4001,
+      "urn": "soundcloud:tracks:4001",
+      "title": "Piste 4001",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH4001",
+      "permalink_url": "https://soundcloud.com/artiste-page/titre-4001",
+      "artwork_url": "https://i1.sndcdn.com/artworks-4001-large.jpg",
+      "publisher_metadata": null,
+      "user": {
+        "id": 4901,
+        "username": "Artiste Page",
+        "permalink_url": "https://soundcloud.com/artiste page",
+        "avatar_url": "https://i1.sndcdn.com/avatars-4001-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:4001/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "track",
+      "id": 4002,
+      "urn": "soundcloud:tracks:4002",
+      "title": "Piste 4002",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH4002",
+      "permalink_url": "https://soundcloud.com/artiste-page/titre-4002",
+      "artwork_url": "https://i1.sndcdn.com/artworks-4002-large.jpg",
+      "publisher_metadata": {
+        "artist": "Artiste Page",
+        "album_title": "Album test"
+      },
+      "user": {
+        "id": 4902,
+        "username": "Artiste Page",
+        "permalink_url": "https://soundcloud.com/artiste page",
+        "avatar_url": "https://i1.sndcdn.com/avatars-4002-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:4002/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    }
+  ],
+  "next_href": "https://api-v2.soundcloud.com/users/5/tracks?offset=2&limit=2&client_id=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  "query_urn": null
+}

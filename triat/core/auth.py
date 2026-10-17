@@ -2,34 +2,33 @@
 
 Un cookie de session Google donne accès au compte : il est traité comme un
 secret. Le contenu est conservé chiffré dans le trousseau système (Secret
-Service via `keyring`) et n'est matérialisé sur disque que dans
-XDG_RUNTIME_DIR — un tmpfs en RAM, en mode 0600, effacé à la déconnexion.
-Il n'est jamais journalisé.
+Service via `keyring`) et n'est jamais écrit en clair sur disque : yt-dlp
+le reçoit en mémoire (`load_into`). Il n'est jamais journalisé.
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
-import http.cookiejar
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import keyring
 import keyring.errors
 from yt_dlp.cookies import SUPPORTED_BROWSERS, extract_cookies_from_browser
 
-from .paths import runtime_dir
+from .constants import KEYRING_SERVICE
 
 log = logging.getLogger(__name__)
 
-KEYRING_SERVICE = "triat"
 KEYRING_KEY = "youtube-cookies"
-COOKIE_FILENAME = "cookies.txt"
+# Après un échec du trousseau (D-Bus absent, trousseau verrouillé), on ne
+# réessaie pas avant ce délai : chaque tentative peut bloquer.
+KEYRING_RETRY_DELAY = 60.0
 
 # Cookies qui prouvent une session authentifiée sur YouTube.
 SESSION_COOKIES = ("SID", "__Secure-3PSID", "SAPISID", "__Secure-3PAPISID")
@@ -138,6 +137,12 @@ def _parse_netscape(text: str) -> list[list[str]]:
     return rows
 
 
+def _rows_to_netscape(rows: list[list[str]]) -> str:
+    lines = ["# Netscape HTTP Cookie File"]
+    lines.extend("\t".join(fields) for fields in rows)
+    return "\n".join(lines) + "\n"
+
+
 def _is_youtube_domain(domain: str) -> bool:
     """`.youtube.com` ou `music.youtube.com`, pas `notyoutube.com`."""
     host = (domain or "").lstrip(".").lower()
@@ -145,13 +150,22 @@ def _is_youtube_domain(domain: str) -> bool:
                for d in YOUTUBE_DOMAINS)
 
 
+_UNSET = object()
+
+
 class CookieManager:
     """Source unique de vérité pour les cookies, côté yt-dlp comme ytmusicapi."""
 
-    def __init__(self, settings=None) -> None:
+    def __init__(self, settings=None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self._settings = settings
-        self._runtime_path = runtime_dir() / COOKIE_FILENAME
-        self._materialized = False
+        self._clock = clock
+        # Échec du trousseau mémorisé jusqu'à cette date (horloge `clock`).
+        self._failed_until = 0.0
+        # Texte des cookies gardé en mémoire : le trousseau est un appel
+        # D-Bus, trop lent pour chaque requête InnerTube ou résolution.
+        # Invalidé par `_store` et `clear`.
+        self._text_cache = _UNSET
 
     # ---- Import --------------------------------------------------------
 
@@ -167,7 +181,16 @@ class CookieManager:
         converted = _json_to_netscape(text)
         if converted is not None:
             text = converted
-        _parse_netscape(text)          # valide avant de stocker
+        rows = _parse_netscape(text)   # valide avant de stocker
+        # Un export « tous sites » contient des cookies sans rapport : on ne
+        # garde (et ne stocke dans le trousseau) que YouTube / Google.
+        kept = [fields for fields in rows if _is_youtube_domain(fields[0])]
+        if not kept:
+            raise CookieError(
+                "Aucun cookie YouTube / Google dans ce fichier. "
+                "Exporte les cookies d'une session connectée à YouTube."
+            )
+        text = _rows_to_netscape(kept)
         self._store(text, source=f"file:{source_path.name}")
         return self.status()
 
@@ -191,60 +214,29 @@ class CookieManager:
         except Exception as exc:
             raise CookieError(f"Extraction depuis {browser} impossible : {exc}") from exc
 
-        relevant = http.cookiejar.MozillaCookieJar()
-        for cookie in jar:
-            if _is_youtube_domain(cookie.domain):
-                relevant.set_cookie(cookie)
-        if not list(relevant):
+        rows = [
+            [
+                cookie.domain,
+                "TRUE" if cookie.domain.startswith(".") else "FALSE",
+                cookie.path or "/",
+                "TRUE" if cookie.secure else "FALSE",
+                str(int(cookie.expires or 0)),
+                cookie.name,
+                cookie.value or "",
+            ]
+            for cookie in jar if _is_youtube_domain(cookie.domain)
+        ]
+        if not rows:
             raise CookieError(
                 f"Aucun cookie YouTube trouvé dans {browser}. "
-                "Connectez-vous à YouTube dans ce navigateur, puis réessayez."
+                "Connecte-toi à YouTube dans ce navigateur, puis réessaie."
             )
 
-        tmp = runtime_dir() / f".extract-{os.getpid()}.txt"
-        try:
-            relevant.save(str(tmp), ignore_discard=True, ignore_expires=True)
-            tmp.chmod(0o600)
-            text = tmp.read_text(encoding="utf-8")
-        finally:
-            tmp.unlink(missing_ok=True)
-
+        text = _rows_to_netscape(rows)     # en mémoire, jamais sur disque
         self._store(text, source=f"browser:{name}")
         return self.status()
 
     # ---- Consommation --------------------------------------------------
-
-    def cookie_file(self) -> str | None:
-        """Chemin d'un cookies.txt utilisable par yt-dlp, ou None."""
-        text = self._load()
-        if text is None:
-            return None
-        if not self._materialized or not self._runtime_path.exists():
-            # O_NOFOLLOW : si le chemin est un lien symbolique — planté par un
-            # autre processus du même utilisateur — l'ouverture échoue au lieu
-            # d'écrire les cookies à l'autre bout (CWE-59).
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
-            try:
-                fd = os.open(self._runtime_path, flags, 0o600)
-            except OSError as exc:
-                # Chemin suspect : on le retire et on réessaie une fois.
-                log.warning("Fichier de cookies inutilisable, recréation: %s", exc)
-                self._runtime_path.unlink(missing_ok=True)
-                fd = os.open(self._runtime_path, flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                # Le mode passé à open() n'agit qu'à la création : sur un
-                # fichier préexistant il faut le forcer (CWE-276).
-                os.fchmod(handle.fileno(), 0o600)
-                handle.write(text)
-            self._materialized = True
-        return str(self._runtime_path)
-
-    def ytdlp_opts(self) -> dict:
-        """Options yt-dlp liées aux cookies : aucune. yt-dlp réécrit son
-        `cookiefile` à chaque appel (en suivant les liens symboliques, depuis
-        plusieurs fils) ; les cookies sont donc chargés en mémoire, voir
-        `load_into`."""
-        return {}
 
     def load_into(self, ydl) -> bool:
         """Charge les cookies dans un `YoutubeDL`, sans fichier sur disque."""
@@ -342,24 +334,22 @@ class CookieManager:
         )
 
     def release(self) -> None:
-        """Retire le fichier de cookies déchiffré, sans toucher au trousseau.
-
-        Appelé à la fermeture : le secret ne doit pas survivre à la session
-        dans XDG_RUNTIME_DIR.
-        """
-        self._runtime_path.unlink(missing_ok=True)
-        self._materialized = False
+        """Appelé à la fermeture. Rien n'est matérialisé sur disque : sans
+        effet, conservé pour les appelants existants."""
 
     def clear(self) -> None:
-        """Efface les cookies du trousseau et du disque."""
+        """Efface les cookies du trousseau."""
+        self._text_cache = _UNSET
         try:
             keyring.delete_password(KEYRING_SERVICE, KEYRING_KEY)
         except keyring.errors.PasswordDeleteError:
-            pass
+            self._text_cache = None
+            self._failed_until = 0.0
         except Exception as exc:
             log.warning("Suppression dans le trousseau impossible: %s", exc)
-        self._runtime_path.unlink(missing_ok=True)
-        self._materialized = False
+        else:
+            self._text_cache = None
+            self._failed_until = 0.0
         if self._settings is not None:
             self._settings.set("cookie_source", None)
             self._settings.save()
@@ -374,21 +364,34 @@ class CookieManager:
                 f"Écriture dans le trousseau impossible : {exc}. "
                 "Un service de trousseau (gnome-keyring, kwallet) est requis."
             ) from exc
-        self._materialized = False
-        self._runtime_path.unlink(missing_ok=True)
+        self._text_cache = text
+        self._failed_until = 0.0
         if self._settings is not None:
             kind, _, detail = source.partition(":")
             self._settings.set("cookie_source",
                                {"kind": kind, "detail": detail, "label": source})
             self._settings.save()
 
-    @staticmethod
-    def _load() -> str | None:
+    def _load(self) -> str | None:
+        cached = self._text_cache
+        if cached is not _UNSET:
+            return cached
+        if self._clock() < self._failed_until:
+            return None                  # échec récent : pas d'aller-retour D-Bus
         try:
-            return keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+            text = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
         except Exception as exc:
             log.warning("Lecture du trousseau impossible: %s", exc)
+            self._failed_until = self._clock() + KEYRING_RETRY_DELAY
             return None
+        self._text_cache = text
+        return text
+
+    def preload(self) -> None:
+        """Lit le trousseau maintenant. À appeler hors du fil GTK (l'appel
+        D-Bus peut bloquer) pour que les lectures suivantes viennent de la
+        mémoire."""
+        self._load()
 
 
 class _SilentLogger:

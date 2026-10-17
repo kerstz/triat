@@ -1,0 +1,1696 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR Triat
+# This file is distributed under the same license as the triat package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: triat\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-17 10:08-0400\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
+
+msgid "Triat ne peut pas démarrer"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"{fatal}\n"
+"\n"
+"Détails dans {journal}.\n"
+"« triat doctor » dans un terminal vérifie l'installation (libmpv, yt-dlp, "
+"cookies)."
+msgstr ""
+
+msgid "Quitter"
+msgstr ""
+
+msgid "Triat"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} titre"
+msgid_plural "{n} titres"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{names} et {last}"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} titre, avec {names}"
+msgid_plural "{n} titres, avec {names}"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "Playlist · {n} titre"
+msgid_plural "Playlist · {n} titres"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Tout lire"
+msgstr ""
+
+msgid "Radio"
+msgstr ""
+
+msgid "Enchaîne sur des titres proches"
+msgstr ""
+
+msgid "Artiste inconnu"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} piste en bibliothèque"
+msgid_plural "{n} pistes en bibliothèque"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Aucune piste en bibliothèque"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} piste, complété en ligne"
+msgid_plural "{n} pistes, complété en ligne"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "en attente"
+msgstr ""
+
+msgid "en cours"
+msgstr ""
+
+msgid "terminé"
+msgstr ""
+
+msgid "échec"
+msgstr ""
+
+msgid "annulé"
+msgstr ""
+
+msgid "Hors-ligne"
+msgstr ""
+
+msgid "Tout suspendre"
+msgstr ""
+
+msgid "Vider"
+msgstr ""
+
+msgid "Retirer les téléchargements terminés"
+msgstr ""
+
+msgid "Options"
+msgstr ""
+
+msgid "Format"
+msgstr ""
+
+msgid "Opus offre le meilleur rapport qualité/poids"
+msgstr ""
+
+msgid "Couper les segments SponsorBlock"
+msgstr ""
+
+msgid "Le fichier produit ne contient plus les passages non musicaux"
+msgstr ""
+
+msgid "Dossier"
+msgstr ""
+
+msgid "Aucun téléchargement. Clic droit sur une piste pour l'ajouter."
+msgstr ""
+
+msgid "Reprendre"
+msgstr ""
+
+#, python-brace-format
+msgid "{done}, {queued} en file"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} terminé"
+msgid_plural "{n} terminés"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{artist}, {state}, {percent} %"
+msgstr ""
+
+#, python-brace-format
+msgid "{artist}, {state}, {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "{artist}, {state}"
+msgstr ""
+
+msgid "Annuler"
+msgstr ""
+
+msgid "Réessayer"
+msgstr ""
+
+msgid "Égaliseur"
+msgstr ""
+
+msgid "Dix bandes d'une octave, de 31 Hz à 16 kHz"
+msgstr ""
+
+msgid "Activer l'égaliseur"
+msgstr ""
+
+msgid "Personnalisé"
+msgstr ""
+
+msgid "Préréglage"
+msgstr ""
+
+msgid "Remettre à plat"
+msgstr ""
+
+#, python-brace-format
+msgid "{band_label} Hz"
+msgstr ""
+
+#, python-brace-format
+msgid "{band_label} hertz"
+msgstr ""
+
+msgid "Chargement du clip…"
+msgstr ""
+
+msgid "Clip indisponible — la musique continue"
+msgstr ""
+
+msgid "Rendu vidéo impossible sur cet affichage"
+msgstr ""
+
+msgid "Bouger la souris pour les contrôles"
+msgstr ""
+
+msgid "Plein écran"
+msgstr ""
+
+msgid "Quitter (Échap)"
+msgstr ""
+
+msgid "Clip"
+msgstr ""
+
+msgid "Matrice"
+msgstr ""
+
+msgid "Paroles"
+msgstr ""
+
+msgid "Le clip officiel (V pour basculer)"
+msgstr ""
+
+msgid "La pochette en matrice de points, au rythme du son (V)"
+msgstr ""
+
+msgid "Précédent"
+msgstr ""
+
+msgid "Lecture"
+msgstr ""
+
+msgid "Suivant"
+msgstr ""
+
+msgid "Pause"
+msgstr ""
+
+#, python-brace-format
+msgid "{label} · Opus"
+msgstr ""
+
+#, python-brace-format
+msgid "À suivre : {title}"
+msgstr ""
+
+msgid "Playlists"
+msgstr ""
+
+msgid "Artistes"
+msgstr ""
+
+msgid "Favoris"
+msgstr ""
+
+msgid "Historique"
+msgstr ""
+
+msgid "Stats"
+msgstr ""
+
+#, python-brace-format
+msgid "{hours} h {minutes:02d}"
+msgstr ""
+
+#, python-brace-format
+msgid "{minutes} min"
+msgstr ""
+
+#, python-brace-format
+msgid "{name}, {rule}"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} titre, synchronisée avec YouTube"
+msgid_plural "{n} titres, synchronisée avec YouTube"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "Lire « {name} »"
+msgstr ""
+
+#, python-brace-format
+msgid "Lire {name}"
+msgstr ""
+
+msgid "Bibliothèque"
+msgstr ""
+
+msgid "Importer"
+msgstr ""
+
+msgid "Fichier .txt d'URL YouTube, .m3u ou .m3u8"
+msgstr ""
+
+msgid "Nouvelle playlist"
+msgstr ""
+
+msgid "Listes intelligentes"
+msgstr ""
+
+msgid "Tes playlists"
+msgstr ""
+
+msgid "Aucune playlist"
+msgstr ""
+
+msgid ""
+"Importe un fichier .txt d'URL YouTube ou .m3u, ou crée une playlist vide."
+msgstr ""
+
+msgid "Retour aux playlists"
+msgstr ""
+
+msgid "Retour"
+msgstr ""
+
+msgid "Aléatoire"
+msgstr ""
+
+msgid "Exporter"
+msgstr ""
+
+msgid "Enregistrer en .m3u8, .txt, .json ou .csv"
+msgstr ""
+
+msgid "Renommer"
+msgstr ""
+
+msgid "Supprimer"
+msgstr ""
+
+msgid "Aucun artiste"
+msgstr ""
+
+msgid "Les artistes de tes playlists, favoris et écoutes apparaîtront ici."
+msgstr ""
+
+#, python-brace-format
+msgid "{n} favori"
+msgid_plural "{n} favoris"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{n} écoute"
+msgid_plural "{n} écoutes"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Aucun favori"
+msgstr ""
+
+msgid "Appuie sur le cœur d'un titre pour le retrouver ici."
+msgstr ""
+
+msgid "Aucune écoute"
+msgstr ""
+
+msgid "Les titres que tu écoutes apparaîtront ici, sauf en session privée."
+msgstr ""
+
+#, python-brace-format
+msgid "{playlists}, {tracks}"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} playlist"
+msgid_plural "{n} playlists"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{n} piste"
+msgid_plural "{n} pistes"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{n} artiste"
+msgid_plural "{n} artistes"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "synchronisée avec YouTube"
+msgstr ""
+
+msgid "playlist locale"
+msgstr ""
+
+msgid "Créer"
+msgstr ""
+
+msgid "Renommer la playlist"
+msgstr ""
+
+#, python-brace-format
+msgid "Supprimer « {name} » ?"
+msgstr ""
+
+msgid "La playlist disparaît ; les pistes restent dans la bibliothèque."
+msgstr ""
+
+#, python-brace-format
+msgid "« {name} » supprimée"
+msgstr ""
+
+msgid "Rien à exporter"
+msgstr ""
+
+msgid "Exporter la playlist"
+msgstr ""
+
+#, python-brace-format
+msgid "Export impossible : {exc}"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} piste exportée vers {name}"
+msgid_plural "{n} pistes exportées vers {name}"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Importer une playlist"
+msgstr ""
+
+msgid "Playlists (.txt, .m3u, .m3u8)"
+msgstr ""
+
+msgid "Tous les fichiers"
+msgstr ""
+
+msgid "Import en cours…"
+msgstr ""
+
+msgid "Import échoué"
+msgstr ""
+
+#, python-brace-format
+msgid "Import impossible : {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "« {name} » importée : {n} piste"
+msgid_plural "« {name} » importée : {n} pistes"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "paroles"
+msgstr ""
+
+msgid "Paroles non proposées pour SoundCloud"
+msgstr ""
+
+msgid "Recherche des paroles…"
+msgstr ""
+
+msgid "Morceau instrumental."
+msgstr ""
+
+#, python-brace-format
+msgid "{source}, non synchronisé"
+msgstr ""
+
+msgid "Paroles indisponibles pour cette piste."
+msgstr ""
+
+msgid "Paroles indisponibles hors ligne"
+msgstr ""
+
+msgid "Triat — mini"
+msgstr ""
+
+msgid "Rien en lecture"
+msgstr ""
+
+msgid "Ouvrir la fenêtre principale"
+msgstr ""
+
+#, python-brace-format
+msgid "{display_artist} · SoundCloud"
+msgstr ""
+
+msgid "Réduire (Ctrl+L)"
+msgstr ""
+
+msgid "Réduire"
+msgstr ""
+
+msgid "Clip ou matrice de points, en plein écran (Ctrl+I)"
+msgstr ""
+
+msgid "Voir l'artiste"
+msgstr ""
+
+msgid "SoundCloud"
+msgstr ""
+
+msgid "Ouvrir sur SoundCloud"
+msgstr ""
+
+msgid "Ajouter aux favoris"
+msgstr ""
+
+msgid "Favori"
+msgstr ""
+
+msgid "Radio infinie"
+msgstr ""
+
+msgid "Poursuit la lecture quand la file se vide"
+msgstr ""
+
+msgid "Lecture aléatoire"
+msgstr ""
+
+msgid "Répétition : désactivée"
+msgstr ""
+
+msgid "Répétition"
+msgstr ""
+
+msgid "Minuterie"
+msgstr ""
+
+msgid "Fin du titre"
+msgstr ""
+
+msgid "Fin de la file"
+msgstr ""
+
+msgid "Annuler la minuterie"
+msgstr ""
+
+msgid "fin du titre"
+msgstr ""
+
+msgid "fin de la file"
+msgstr ""
+
+msgid "À suivre"
+msgstr ""
+
+msgid "désactivée"
+msgstr ""
+
+msgid "la file"
+msgstr ""
+
+msgid "la piste"
+msgstr ""
+
+#, python-brace-format
+msgid "Répétition : {mode}"
+msgstr ""
+
+msgid "Pas de clip pour SoundCloud"
+msgstr ""
+
+msgid "Retirer des favoris"
+msgstr ""
+
+msgid "triat"
+msgstr ""
+
+msgid "Toute la musique de YouTube. Sans publicité, sans intro parlée."
+msgstr ""
+
+msgid "Local d'abord"
+msgstr ""
+
+msgid "Bibliothèque, playlists et historique restent sur ta machine."
+msgstr ""
+
+msgid "Aucune télémétrie"
+msgstr ""
+
+msgid "Rien n'est envoyé ailleurs que vers YouTube et SponsorBlock."
+msgstr ""
+
+msgid "SponsorBlock intégré"
+msgstr ""
+
+msgid "Les passages non musicaux sont sautés automatiquement."
+msgstr ""
+
+msgid "Continuer sans compte"
+msgstr ""
+
+msgid "Importer tes cookies"
+msgstr ""
+
+msgid ""
+"Sans compte, la recherche, la lecture et SponsorBlock fonctionnent. Les "
+"recommandations personnalisées, elles, demandent une session YouTube."
+msgstr ""
+
+msgid "Aucun navigateur accessible"
+msgstr ""
+
+msgid "Aucun navigateur détecté"
+msgstr ""
+
+msgid "Navigateur"
+msgstr ""
+
+msgid "Importer depuis ce navigateur"
+msgstr ""
+
+msgid ""
+"Les cookies sont chiffrés dans le trousseau du système, jamais écrits en "
+"clair."
+msgstr ""
+
+msgid ""
+"Triat tourne dans un bac à sable Flatpak : les profils de tes navigateurs "
+"lui sont invisibles. Continue, puis importe un fichier cookies.txt depuis "
+"les réglages."
+msgstr ""
+
+msgid ""
+"Aucun profil de navigateur trouvé. Continue : tu pourras importer un fichier "
+"cookies.txt depuis les réglages."
+msgstr ""
+
+msgid "Sauter le hors-sujet"
+msgstr ""
+
+msgid ""
+"Triat saute les passages non musicaux : intros parlées, sponsors, rappels "
+"d'abonnement. Réglable catégorie par catégorie dans les réglages."
+msgstr ""
+
+msgid "Sauter les segments"
+msgstr ""
+
+msgid "Recommandé"
+msgstr ""
+
+msgid "Qualité audio"
+msgstr ""
+
+msgid ""
+"Opus offre le meilleur rapport qualité-débit. Ce choix concerne les fichiers "
+"téléchargés ; la qualité de lecture se règle ensuite dans les réglages."
+msgstr ""
+
+msgid "Format téléchargé"
+msgstr ""
+
+msgid "Sources supplémentaires"
+msgstr ""
+
+msgid "Facultatif"
+msgstr ""
+
+#, python-brace-format
+msgid "Lecture du profil {browser_label}…"
+msgstr ""
+
+#, python-brace-format
+msgid "Session trouvée : {count} cookies. Les recommandations sont actives."
+msgstr ""
+
+msgid ""
+"Cookies importés, mais sans session connectée. Connecte-toi à YouTube dans "
+"le navigateur, puis réessaie."
+msgstr ""
+
+msgid "compte, facultatif"
+msgstr ""
+
+msgid "qualité"
+msgstr ""
+
+#, python-brace-format
+msgid "Étape {step} sur {total} : {title}"
+msgstr ""
+
+msgid "Commencer"
+msgstr ""
+
+msgid "Les deux"
+msgstr ""
+
+msgid "SoundCloud injoignable"
+msgstr ""
+
+msgid "Pas de connexion"
+msgstr ""
+
+msgid "YouTube est injoignable. Vérifie ta connexion, puis réessaie."
+msgstr ""
+
+msgid "Recherche impossible"
+msgstr ""
+
+msgid "YouTube n'a pas répondu comme prévu. Réessaie dans un instant."
+msgstr ""
+
+msgid "Tout"
+msgstr ""
+
+msgid "Titres"
+msgstr ""
+
+msgid "Artiste"
+msgstr ""
+
+msgid "Playlist"
+msgstr ""
+
+msgid "Titre"
+msgstr ""
+
+#, python-brace-format
+msgid "Meilleur résultat : {title}, {badge}"
+msgstr ""
+
+msgid "Titre, artiste, ou URL YouTube collée…"
+msgstr ""
+
+msgid "Filtres"
+msgstr ""
+
+msgid "Source de recherche"
+msgstr ""
+
+msgid "Source :"
+msgstr ""
+
+msgid "Aucune recherche"
+msgstr ""
+
+msgid "Tape un titre, un artiste, ou colle une URL youtube.com."
+msgstr ""
+
+msgid "Recherches récentes"
+msgstr ""
+
+msgid "Meilleur résultat"
+msgstr ""
+
+msgid "Tout voir"
+msgstr ""
+
+msgid "Recherche en cours…"
+msgstr ""
+
+msgid "Réessaie dans un instant."
+msgstr ""
+
+msgid "Aucun résultat"
+msgstr ""
+
+msgid "Essaie d'autres mots."
+msgstr ""
+
+msgid "Recherche SoundCloud…"
+msgstr ""
+
+msgid "Aucun titre sur SoundCloud."
+msgstr ""
+
+#, python-brace-format
+msgid "{n} titre ignoré"
+msgid_plural "{n} titres ignorés"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Passage non musical"
+msgstr ""
+
+msgid "Intros parlées, outros, tout ce qui n'est pas la musique"
+msgstr ""
+
+msgid "Sponsor"
+msgstr ""
+
+msgid "Publicité payée insérée dans la vidéo"
+msgstr ""
+
+msgid "Auto-promotion"
+msgstr ""
+
+msgid "L'auteur fait la promotion de ses propres contenus"
+msgstr ""
+
+msgid "Rappel d'abonnement"
+msgstr ""
+
+msgid "« Abonnez-vous, likez »"
+msgstr ""
+
+msgid "Intro"
+msgstr ""
+
+msgid "Générique ou écran d'accueil"
+msgstr ""
+
+msgid "Outro"
+msgstr ""
+
+msgid "Générique de fin, cartes de fin"
+msgstr ""
+
+msgid "Récapitulatif"
+msgstr ""
+
+msgid "Résumé de ce qui va suivre"
+msgstr ""
+
+msgid "Digression"
+msgstr ""
+
+msgid "Aparté sans rapport avec le sujet"
+msgstr ""
+
+msgid "Auto"
+msgstr ""
+
+msgid "Notifier"
+msgstr ""
+
+msgid "Ignorer"
+msgstr ""
+
+msgid "Basse"
+msgstr ""
+
+msgid "Normale"
+msgstr ""
+
+msgid "Haute"
+msgstr ""
+
+msgid "Maximale"
+msgstr ""
+
+#, python-brace-format
+msgid "Expire dans {minutes}:{seconds:02d}"
+msgstr ""
+
+msgid "Jamais synchronisé"
+msgstr ""
+
+msgid "Dernière synchro : à l'instant"
+msgstr ""
+
+#, python-brace-format
+msgid "Dernière synchro : il y a {n} min"
+msgstr ""
+
+#, python-brace-format
+msgid "Dernière synchro : il y a {n} h"
+msgstr ""
+
+#, python-brace-format
+msgid "Dernière synchro : il y a {n} j"
+msgstr ""
+
+msgid "Appairage inachevé : en attente de la première synchro"
+msgstr ""
+
+msgid ""
+"SoundCloud n'autorise pas officiellement cet usage ; le service peut cesser "
+"de fonctionner à tout moment ; aucun contenu n'est téléchargé."
+msgstr ""
+
+msgid ""
+"Pas de téléchargement, pas de paroles ni de SponsorBlock, pas de synchro "
+"avec le téléphone pour ces titres."
+msgstr ""
+
+msgid "Automatique"
+msgstr ""
+
+msgid "Activer SoundCloud ?"
+msgstr ""
+
+msgid "Activer"
+msgstr ""
+
+msgid "SoundCloud (expérimental)"
+msgstr ""
+
+msgid "Recherche et lecture de titres SoundCloud"
+msgstr ""
+
+msgid "Identifiant client : introuvable"
+msgstr ""
+
+#, python-brace-format
+msgid "Identifiant client : trouvé il y a {n} min"
+msgstr ""
+
+#, python-brace-format
+msgid "Identifiant client : trouvé il y a {n} h"
+msgstr ""
+
+#, python-brace-format
+msgid "Identifiant client : trouvé il y a {n} j"
+msgstr ""
+
+msgid "Réglages"
+msgstr ""
+
+msgid "Opus est préféré quand il est disponible"
+msgstr ""
+
+msgid "Poursuit la lecture quand la file d'attente se vide"
+msgstr ""
+
+msgid "Fondu à la pause"
+msgstr ""
+
+msgid "Adoucit la pause et la reprise (environ 200 ms)"
+msgstr ""
+
+msgid "Égaliser le volume"
+msgstr ""
+
+msgid "Rapproche le niveau sonore d'une piste à l'autre"
+msgstr ""
+
+msgid "Sources"
+msgstr ""
+
+msgid "YouTube reste la source principale."
+msgstr ""
+
+msgid "Source de recherche par défaut"
+msgstr ""
+
+msgid "Qualité SoundCloud"
+msgstr ""
+
+msgid "Badge de source"
+msgstr ""
+
+msgid "Indique l'origine de chaque titre"
+msgstr ""
+
+msgid "Masquer les titres non lisibles"
+msgstr ""
+
+msgid "Cache les titres Go+ ou protégés au lieu de les griser"
+msgstr ""
+
+msgid "Identifiant client"
+msgstr ""
+
+msgid "Effacer les données SoundCloud"
+msgstr ""
+
+msgid "Supprime les titres SoundCloud de la bibliothèque"
+msgstr ""
+
+msgid "Effacer les données SoundCloud ?"
+msgstr ""
+
+msgid ""
+"Les titres SoundCloud sont retirés de la bibliothèque, des playlists et de "
+"l'historique."
+msgstr ""
+
+msgid "Effacer"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} titre SoundCloud effacé"
+msgid_plural "{n} titres SoundCloud effacés"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "SponsorBlock"
+msgstr ""
+
+msgid ""
+"Les segments sont demandés par préfixe de hachage : l'identifiant de la "
+"vidéo ne quitte jamais ta machine. Données SponsorBlock (sponsor.ajay.app), "
+"licence CC BY-NC-SA 4.0."
+msgstr ""
+
+msgid "Active la détection et le saut"
+msgstr ""
+
+msgid "Requêtes anonymes"
+msgstr ""
+
+msgid "Seuls les 4 premiers caractères du hachage partent"
+msgstr ""
+
+msgid "SHA-256 · 4"
+msgstr ""
+
+msgid "Catégories"
+msgstr ""
+
+msgid ""
+"Auto saute sans rien demander, Notifier propose un bouton, Ignorer ne fait "
+"rien."
+msgstr ""
+
+msgid "Session"
+msgstr ""
+
+msgid "sautées depuis le lancement"
+msgstr ""
+
+#, python-brace-format
+msgid "{segments} dans {tracks}"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} segment"
+msgid_plural "{n} segments"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Compte"
+msgstr ""
+
+msgid "Cookies YouTube"
+msgstr ""
+
+msgid ""
+"Sans compte, la recherche et la radio fonctionnent, mais pas les "
+"recommandations personnalisées."
+msgstr ""
+
+msgid "Statut"
+msgstr ""
+
+msgid "Importer depuis un navigateur"
+msgstr ""
+
+msgid ""
+"Triat tourne dans un bac à sable Flatpak : importe plutôt un fichier "
+"cookies.txt"
+msgstr ""
+
+msgid "Le navigateur doit être fermé"
+msgstr ""
+
+msgid "Actions"
+msgstr ""
+
+msgid "Depuis un fichier"
+msgstr ""
+
+msgid "Vérification…"
+msgstr ""
+
+msgid "Trousseau illisible"
+msgstr ""
+
+msgid "Aucun cookie enregistré"
+msgstr ""
+
+msgid "Session expirée : réimporte-les"
+msgstr ""
+
+#, python-brace-format
+msgid "Session authentifiée, {count} cookies, expire dans {days} j"
+msgstr ""
+
+#, python-brace-format
+msgid "Session authentifiée, {count} cookies"
+msgstr ""
+
+#, python-brace-format
+msgid "{count} cookies, sans session : visiteur seulement"
+msgstr ""
+
+msgid "Importer des cookies"
+msgstr ""
+
+msgid "Cookies (.txt, .json)"
+msgstr ""
+
+msgid "Effacer les cookies YouTube ?"
+msgstr ""
+
+msgid ""
+"La session est supprimée du trousseau : les recommandations personnalisées "
+"s'arrêtent jusqu'au prochain import."
+msgstr ""
+
+msgid "Contenu"
+msgstr ""
+
+#, python-brace-format
+msgid "{tracks}, {playlists}, {favorites}, {plays} ({listened})"
+msgstr ""
+
+msgid "Compléter les durées"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} piste sans durée"
+msgid_plural "{n} pistes sans durée"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Toutes les durées sont connues"
+msgstr ""
+
+msgid "Compléter"
+msgstr ""
+
+msgid "Historique de recherche"
+msgstr ""
+
+msgid "Les 8 dernières requêtes, locales"
+msgstr ""
+
+msgid "Historique d'écoute"
+msgstr ""
+
+msgid "Alimente les mixes et « En boucle »"
+msgstr ""
+
+msgid "Interrogation de YouTube…"
+msgstr ""
+
+msgid "Effacer l'historique d'écoute ?"
+msgstr ""
+
+msgid ""
+"Les playlists et favoris restent. Les mixes et « En boucle » repartiront de "
+"zéro."
+msgstr ""
+
+msgid "ListenBrainz"
+msgstr ""
+
+msgid ""
+"Déclare tes écoutes à un service ouvert. Le jeton se trouve sur "
+"listenbrainz.org, dans tes réglages de profil."
+msgstr ""
+
+msgid "État"
+msgstr ""
+
+msgid "Jeton"
+msgstr ""
+
+msgid "Connecter"
+msgstr ""
+
+msgid "Oublier"
+msgstr ""
+
+msgid "compte inconnu"
+msgstr ""
+
+#, python-brace-format
+msgid "Connecté : {user}"
+msgstr ""
+
+msgid "Non connecté"
+msgstr ""
+
+msgid "Colle d'abord un jeton"
+msgstr ""
+
+#, python-brace-format
+msgid "Connecté : {name}"
+msgstr ""
+
+msgid "Apparence"
+msgstr ""
+
+msgid "Suivre l'accent du bureau"
+msgstr ""
+
+msgid ""
+"Reprend la couleur de ~/.config/nothing/config.json (redémarrage nécessaire)"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Accent actuel : {accent} — lu dans ~/.config/nothing/config.json "
+"(redémarrage nécessaire)"
+msgstr ""
+
+msgid "Scène ouverte par Ctrl+I ; V bascule ensuite"
+msgstr ""
+
+msgid "Clip vidéo"
+msgstr ""
+
+msgid "Matrice de points"
+msgstr ""
+
+msgid "Synchronisation"
+msgstr ""
+
+msgid "Téléphone"
+msgstr ""
+
+msgid ""
+"Favoris, playlists et historique restent identiques sur le bureau et sur le "
+"téléphone. Tout passe par le Wi-Fi local, rien ne sort sur Internet."
+msgstr ""
+
+msgid "Synchroniser avec le téléphone (Wi-Fi)"
+msgstr ""
+
+msgid "Le bureau attend le téléphone tant que Triat est ouvert"
+msgstr ""
+
+msgid "Adresse du bureau"
+msgstr ""
+
+msgid "Copier"
+msgstr ""
+
+msgid "Copier les adresses"
+msgstr ""
+
+msgid "Nouveau téléphone"
+msgstr ""
+
+msgid "Affiche un code à saisir sur le téléphone"
+msgstr ""
+
+msgid "Associer un téléphone"
+msgstr ""
+
+msgid "Bidirectionnel"
+msgstr ""
+
+msgid "Téléphone vers PC"
+msgstr ""
+
+msgid "PC vers téléphone"
+msgstr ""
+
+msgid "Sens de la synchro"
+msgstr ""
+
+msgid ""
+"Bidirectionnel : les deux côtés restent identiques. Sinon, un seul côté "
+"reçoit les nouveautés de l'autre."
+msgstr ""
+
+msgid "Téléphones associés"
+msgstr ""
+
+msgid ""
+"Oublier un téléphone l'empêche de se synchroniser jusqu'à un nouvel "
+"appairage."
+msgstr ""
+
+msgid "Session YouTube"
+msgstr ""
+
+msgid "Partager la session YouTube avec le téléphone"
+msgstr ""
+
+msgid ""
+"La session part chiffrée vers les téléphones associés, seulement sur le Wi-"
+"Fi local"
+msgstr ""
+
+msgid "Sécurité"
+msgstr ""
+
+msgid "Refuser les anciennes versions de l'app mobile"
+msgstr ""
+
+msgid ""
+"Exige le format de synchro protégé contre le rejeu. Les téléphones qui l'ont "
+"déjà utilisé n'ont plus le droit de revenir à l'ancien format"
+msgstr ""
+
+msgid "Synchro impossible : port indisponible"
+msgstr ""
+
+#, python-brace-format
+msgid "Port {fallback} occupé : port {port} utilisé"
+msgstr ""
+
+msgid "Serveur non démarré"
+msgstr ""
+
+msgid "Active la synchro pour la voir"
+msgstr ""
+
+msgid "adresse inconnue"
+msgstr ""
+
+#, python-brace-format
+msgid " (port {port} occupé)"
+msgstr ""
+
+msgid "Adresses copiées"
+msgstr ""
+
+msgid "Aucun téléphone associé"
+msgstr ""
+
+msgid ""
+"Sur le téléphone, ouvre Triat > Ordinateur et scanne le QR code, ou choisis "
+"cet ordinateur et saisis le code."
+msgstr ""
+
+#, python-brace-format
+msgid "Code d'appairage : {code}"
+msgstr ""
+
+msgid "QR code d'appairage"
+msgstr ""
+
+msgid "Téléphone associé"
+msgstr ""
+
+msgid "Appairage fermé : relance-le"
+msgstr ""
+
+msgid "Système"
+msgstr ""
+
+msgid "Vie privée"
+msgstr ""
+
+msgid "Session privée"
+msgstr ""
+
+msgid "N'enregistre rien dans l'historique d'écoute"
+msgstr ""
+
+msgid "Recommandations écartées"
+msgstr ""
+
+msgid "Gérer"
+msgstr ""
+
+msgid "Effacer toutes mes données"
+msgstr ""
+
+msgid "Bibliothèque, playlists, historique et cookies"
+msgstr ""
+
+msgid "Tout effacer"
+msgstr ""
+
+msgid "Rien n'est écarté des suggestions"
+msgstr ""
+
+#, python-brace-format
+msgid "{tracks} et {artists}"
+msgstr ""
+
+msgid ""
+"Ces titres et artistes ne sont plus proposés dans les mixes, la radio ni les "
+"suggestions. La lecture, la recherche et tes playlists ne changent pas."
+msgstr ""
+
+msgid "Rien n'est écarté"
+msgstr ""
+
+msgid "Retirer"
+msgstr ""
+
+msgid "Fermer"
+msgstr ""
+
+msgid "Effacer toutes tes données ?"
+msgstr ""
+
+msgid ""
+"Seront supprimés : ta bibliothèque et tes playlists, l'historique, les "
+"cookies, les paroles et pochettes en cache, la file d'écoutes ListenBrainz "
+"en attente, les journaux, les copies de base mises de côté et les appareils "
+"appairés. Cette action est irréversible."
+msgstr ""
+
+msgid "Supprimer aussi les titres téléchargés"
+msgstr ""
+
+msgid "Rien ici pour l'instant"
+msgstr ""
+
+msgid "écoutes"
+msgstr ""
+
+msgid "d'écoute"
+msgstr ""
+
+msgid "jours avec écoute"
+msgstr ""
+
+msgid "jours d'affilée"
+msgstr ""
+
+msgid "Titres les plus écoutés"
+msgstr ""
+
+msgid "Artistes les plus écoutés"
+msgstr ""
+
+#, python-brace-format
+msgid "« {title} » sera lue ensuite"
+msgstr ""
+
+#, python-brace-format
+msgid "« {title} » ajoutée à la file"
+msgstr ""
+
+msgid "Ajoutée aux favoris"
+msgstr ""
+
+msgid "Retirée des favoris"
+msgstr ""
+
+msgid "Ne plus recommander ?"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"« {title} »\n"
+"La lecture, la recherche et tes playlists ne changent pas : seules les "
+"suggestions sont concernées."
+msgstr ""
+
+msgid "Ce titre"
+msgstr ""
+
+#, python-brace-format
+msgid "Tout {artist}"
+msgstr ""
+
+#, python-brace-format
+msgid "« {label} » ne sera plus recommandé"
+msgstr ""
+
+msgid "Lien copié"
+msgstr ""
+
+#, python-brace-format
+msgid "« {title} » en téléchargement"
+msgstr ""
+
+msgid "Déjà téléchargée"
+msgstr ""
+
+msgid "Ajouter à une playlist"
+msgstr ""
+
+msgid "Nouvelle playlist…"
+msgstr ""
+
+msgid "Nom de la nouvelle playlist"
+msgstr ""
+
+msgid "Ajouter"
+msgstr ""
+
+#, python-brace-format
+msgid "Ajoutée à « {name} »"
+msgstr ""
+
+#, python-brace-format
+msgid "« {name} » créée"
+msgstr ""
+
+msgid "Lire ensuite"
+msgstr ""
+
+msgid "Ajouter à la file"
+msgstr ""
+
+msgid "Ajouter à une playlist…"
+msgstr ""
+
+msgid "Télécharger"
+msgstr ""
+
+msgid "Aller à l'artiste"
+msgstr ""
+
+msgid "Copier le lien"
+msgstr ""
+
+msgid "Ne plus recommander…"
+msgstr ""
+
+msgid "En cours"
+msgstr ""
+
+#, python-brace-format
+msgid "{name} · SoundCloud"
+msgstr ""
+
+#, python-brace-format
+msgid "Artiste {name}"
+msgstr ""
+
+#, python-brace-format
+msgid "Playlist {name}"
+msgstr ""
+
+msgid "Source : SoundCloud"
+msgstr ""
+
+#, python-brace-format
+msgid "Pochette de {title}"
+msgstr ""
+
+msgid "Progression de la lecture"
+msgstr ""
+
+#, python-brace-format
+msgid "{position} sur {duration}"
+msgstr ""
+
+msgid "Volume"
+msgstr ""
+
+#, python-brace-format
+msgid "Volume {percent} %"
+msgstr ""
+
+msgid "février"
+msgstr ""
+
+msgid "août"
+msgstr ""
+
+msgid "décembre"
+msgstr ""
+
+msgid "Lecture / pause"
+msgstr ""
+
+msgid "Reculer de 5 s"
+msgstr ""
+
+msgid "Avancer de 5 s"
+msgstr ""
+
+msgid "Piste précédente"
+msgstr ""
+
+msgid "Piste suivante"
+msgstr ""
+
+msgid "Rechercher"
+msgstr ""
+
+msgid "Lecture en cours"
+msgstr ""
+
+msgid "Plein écran (Immersion)"
+msgstr ""
+
+msgid "Mini-lecteur"
+msgstr ""
+
+msgid "Fermer la vue ouverte"
+msgstr ""
+
+msgid "Raccourcis clavier"
+msgstr ""
+
+msgid "Accueil"
+msgstr ""
+
+msgid "Recherche"
+msgstr ""
+
+msgid "Bonjour"
+msgstr ""
+
+msgid "Bon après-midi"
+msgstr ""
+
+msgid "Bonsoir"
+msgstr ""
+
+#, python-brace-format
+msgid "{day} {number} {month}"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Réglages\n"
+"Données : {shown}"
+msgstr ""
+
+msgid "Ma radio"
+msgstr ""
+
+msgid "Enchaîne sur ce que tu écoutes"
+msgstr ""
+
+msgid "Le clip, ou la matrice de points (Ctrl+I)"
+msgstr ""
+
+msgid "Rien n'a encore été écouté"
+msgstr ""
+
+msgid "Cherche un titre pour commencer"
+msgstr ""
+
+msgid "Ou importe une playlist depuis la Bibliothèque."
+msgstr ""
+
+msgid "En lecture"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"{reason}\n"
+"{subtitle}"
+msgstr ""
+
+#, python-brace-format
+msgid "{title}, {subtitle}"
+msgstr ""
+
+msgid "Mixes pour toi"
+msgstr ""
+
+msgid "Suggestions"
+msgstr ""
+
+msgid "Écouter à nouveau"
+msgstr ""
+
+msgid "Rien pour l'instant"
+msgstr ""
+
+msgid "Ton historique d'écoute apparaîtra ici. Il reste sur cet ordinateur."
+msgstr ""
+
+msgid ""
+"Importe un fichier de liens YouTube depuis la Bibliothèque pour créer ta "
+"première playlist."
+msgstr ""
+
+msgid "Selon ton compte YouTube Music"
+msgstr ""
+
+msgid "Suggestions YouTube, sans compte"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} h"
+msgstr ""
+
+#, python-brace-format
+msgid "{n} j"
+msgstr ""
+
+#, python-brace-format
+msgid " · hors ligne, mis à jour il y a {ago}"
+msgstr ""
+
+msgid "Choisis une piste"
+msgstr ""
+
+msgid "Lecture en cours (Ctrl+L)"
+msgstr ""
+
+msgid "Ouvrir Lecture en cours"
+msgstr ""
+
+msgid "Chargement"
+msgstr ""
+
+msgid "Plein écran (Ctrl+I)"
+msgstr ""
+
+msgid "Réglages appliqués"
+msgstr ""
+
+#, python-brace-format
+msgid "{libelle} sauté · {format_time}"
+msgstr ""
+
+#, python-brace-format
+msgid "{category_label} détecté"
+msgstr ""
+
+msgid "Sauter"
+msgstr ""
+
+msgid "Artiste inconnu pour cette piste"
+msgstr ""
+
+msgid "Raccourcis"
+msgstr ""

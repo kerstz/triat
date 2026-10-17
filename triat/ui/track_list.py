@@ -13,8 +13,10 @@ gi.require_version("Graphene", "1.0")
 
 from gi.repository import Gdk, Gio, GObject, Graphene, Gtk
 
-from ..core.models import TrackRef, display_title
+from ..core.models import SOUNDCLOUD, TrackRef
+from ..core.sources import unplayable_label
 from .widgets.cover import Cover
+from ..i18n import _
 
 
 def format_time(seconds: float) -> str:
@@ -70,6 +72,8 @@ class TrackList(Gtk.ListView):
         self._menu_index = -1
         self._bound: set = set()
         self._favorite_checker = None
+        # video_id -> raison (snip, drm, blocked, removed) : pistes grisées.
+        self._unplayable: dict[str, str] = {}
         self._build_menu()
 
     # ---- Menu contextuel -------------------------------------------------
@@ -77,23 +81,15 @@ class TrackList(Gtk.ListView):
     def _build_menu(self) -> None:
         """Menu au clic droit (screens.md §4)."""
         menu = Gio.Menu()
-        lecture = Gio.Menu()
-        lecture.append("Lire ensuite", "piste.next")
-        lecture.append("Ajouter à la file", "piste.queue")
-        menu.append_section(None, lecture)
-
-        organiser = Gio.Menu()
-        self._organiser = organiser
-        organiser.append("Ajouter aux favoris", "piste.favorite")
-        organiser.append("Ajouter à une playlist…", "piste.playlist")
-        organiser.append("Télécharger", "piste.download")
-        menu.append_section(None, organiser)
-
-        divers = Gio.Menu()
-        divers.append("Aller à l'artiste", "piste.artist")
-        divers.append("Copier le lien", "piste.copy")
-        divers.append("Ne plus recommander…", "piste.block")
-        menu.append_section(None, divers)
+        # Sections remplies à l'ouverture (`_populate_menu`) : le contenu
+        # dépend de la piste (SoundCloud : ni téléchargement, ni artiste).
+        self._lecture = Gio.Menu()
+        self._organiser = Gio.Menu()
+        self._divers = Gio.Menu()
+        menu.append_section(None, self._lecture)
+        menu.append_section(None, self._organiser)
+        menu.append_section(None, self._divers)
+        self._populate_menu(None, False)
 
         self._popover = Gtk.PopoverMenu.new_from_model(menu)
         self._popover.set_parent(self)
@@ -102,7 +98,7 @@ class TrackList(Gtk.ListView):
 
         group = Gio.SimpleActionGroup()
         for name in ("next", "queue", "favorite", "playlist", "copy",
-                     "download", "artist", "block"):
+                     "download", "artist", "block", "open"):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", self._on_menu_action, name)
             group.add_action(action)
@@ -132,13 +128,35 @@ class TrackList(Gtk.ListView):
         except Exception:
             return False
 
+    def _populate_menu(self, ref, favorite: bool) -> None:
+        """Compose le menu pour `ref` (None : menu YouTube par défaut)."""
+        soundcloud = ref is not None and ref.source == SOUNDCLOUD
+        playable = ref is None or ref.video_id not in self._unplayable
+        self._lecture.remove_all()
+        if playable:
+            self._lecture.append(_("Lire ensuite"), "piste.next")
+            self._lecture.append(_("Ajouter à la file"), "piste.queue")
+        self._organiser.remove_all()
+        self._organiser.append(
+            _("Retirer des favoris") if favorite else _("Ajouter aux favoris"),
+            "piste.favorite")
+        if playable:
+            self._organiser.append(_("Ajouter à une playlist…"), "piste.playlist")
+            if not soundcloud:                  # jamais de téléchargement SC
+                self._organiser.append(_("Télécharger"), "piste.download")
+        self._divers.remove_all()
+        if soundcloud:
+            self._divers.append(_("Ouvrir sur SoundCloud"), "piste.open")
+        else:
+            self._divers.append(_("Aller à l'artiste"), "piste.artist")
+        self._divers.append(_("Copier le lien"), "piste.copy")
+        if playable:
+            self._divers.append(_("Ne plus recommander…"), "piste.block")
+
     def _refresh_favorite_label(self, index: int) -> None:
         item = self._store.get_item(index)
         favorite = item is not None and self._is_favorite(item.ref)
-        self._organiser.remove(0)
-        self._organiser.insert(
-            0, "Retirer des favoris" if favorite else "Ajouter aux favoris",
-            "piste.favorite")
+        self._populate_menu(item.ref if item is not None else None, favorite)
 
     def _open_menu(self, index: int, anchor: Gtk.Widget | None,
                    x: float, y: float) -> None:
@@ -191,6 +209,24 @@ class TrackList(Gtk.ListView):
         # (100 ms pour 217 pistes, une saccade à chaque ouverture).
         items = [TrackItem(ref, index) for index, ref in enumerate(refs)]
         self._store.splice(0, self._store.get_n_items(), items)
+
+    def set_unplayable(self, unplayable: dict[str, str] | None) -> None:
+        """Pistes non lisibles (grisées, non activables), par raison."""
+        self._unplayable = dict(unplayable or {})
+        count = self._store.get_n_items()
+        if count:
+            self._store.items_changed(0, count, count)
+
+    def _badge_enabled(self) -> bool:
+        root = self.get_root()
+        engine = getattr(root, "engine", None) if root else None
+        settings = getattr(engine, "settings", None)
+        if settings is None:
+            return True
+        try:
+            return bool(settings.get("source_badge"))
+        except Exception:
+            return True
 
     def set_current(self, video_id: str | None) -> None:
         """Marque la piste en cours (point accent à la place du numéro)."""
@@ -255,7 +291,7 @@ class TrackList(Gtk.ListView):
         number.set_text("●" if playing else f"{item.index + 1:02d}")
         if playing:
             # Le point seul serait lu « disque noir ».
-            number.update_property([Gtk.AccessibleProperty.LABEL], ["En cours"])
+            number.update_property([Gtk.AccessibleProperty.LABEL], [_("En cours")])
         else:
             number.reset_property(Gtk.AccessibleProperty.LABEL)
         self._bound.add(list_item)
@@ -266,14 +302,40 @@ class TrackList(Gtk.ListView):
         else:
             number.remove_css_class("triat-accent-text")
             row.remove_css_class("playing")
-        title.set_text(display_title(item.ref.title, item.ref.artist))
+        title.set_text(item.ref.display_title)
         title.set_tooltip_text(item.ref.title)
-        cover.set_track(item.ref)
-        artist.set_text(item.ref.artist or "—")
+        cover.set_track(item.ref, badge=self._badge_enabled())
+        name = item.ref.display_artist or "—"
+        if item.ref.source == SOUNDCLOUD:        # attribution obligatoire
+            name = _("{name} · SoundCloud").format(name=name)
+        artist.set_text(name)
+        reason = self._unplayable.get(item.ref.video_id)
+        if reason is not None:
+            text = unplayable_label(reason)
+            row.add_css_class("unplayable")
+            row.add_css_class("dim-label")
+            row.set_tooltip_text(text)
+            row.update_property([Gtk.AccessibleProperty.DESCRIPTION], [text])
+            self._set_activatable(list_item, False)
+        else:
+            row.remove_css_class("unplayable")
+            row.remove_css_class("dim-label")
+            row.set_tooltip_text(None)
+            row.reset_property(Gtk.AccessibleProperty.DESCRIPTION)
+            self._set_activatable(list_item, True)
         duration.set_text(format_time(item.ref.duration) if item.ref.duration else "—")
+
+    @staticmethod
+    def _set_activatable(list_item, value: bool) -> None:
+        setter = getattr(list_item, "set_activatable", None)
+        if setter is not None:
+            setter(value)
 
     def _on_unbind(self, _factory, list_item: Gtk.ListItem) -> None:
         self._bound.discard(list_item)
 
     def _on_activate(self, _view, position: int) -> None:
+        item = self._store.get_item(position)
+        if item is not None and item.ref.video_id in self._unplayable:
+            return
         self.emit("track-activated", position)

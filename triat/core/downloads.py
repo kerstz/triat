@@ -8,6 +8,7 @@ piste propre plutôt qu'une vidéo avec son intro parlée.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -19,6 +20,7 @@ import yt_dlp
 from .extractor import JS_RUNTIMES
 from .models import TrackRef
 from .paths import downloads_dir
+from .sponsorblock import CATEGORIES, SKIP
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,23 @@ QUALITY_BITRATE = {"low": "96", "normal": "128", "high": "192", "max": "0"}
 
 # Caractères interdits ou pénibles dans un nom de fichier.
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+# Extensions des fichiers que Triat produit (audio + vignettes laissées par
+# yt-dlp) : seuls ceux-là sont supprimés par `delete_all_files`.
+_MANAGED_EXTENSIONS = frozenset({
+    ".opus", ".m4a", ".mp3", ".webm", ".ogg",
+    ".jpg", ".jpeg", ".png", ".webp", ".part", ".ytdl"})
+_TEMP_EXTENSIONS = frozenset({".part", ".ytdl"})
+# Nommage de Triat : « titre [id YouTube de 11 caractères] ».
+_TRIAT_STEM = re.compile(r" \[[A-Za-z0-9_-]{11}\]$")
+
+
+def is_downloadable_id(video_id: str) -> bool:
+    """Seuls les identifiants YouTube se téléchargent : un id d'une autre
+    source (« soundcloud:… », tout id contenant « : ») est refusé."""
+    return bool(video_id) and ":" not in video_id \
+        and not video_id.startswith("soundcloud")
+
 
 PENDING, RUNNING, DONE, FAILED, CANCELLED = (
     "pending", "running", "done", "failed", "cancelled")
@@ -101,6 +120,8 @@ class DownloadManager:
             known = {t.ref.video_id for t in self._queue
                      if t.state in (PENDING, RUNNING, DONE)}
             for ref in refs:
+                if not is_downloadable_id(ref.video_id):
+                    continue            # SoundCloud : jamais téléchargé
                 if ref.video_id in known:
                     continue
                 if self.local_path(ref) is not None:
@@ -119,6 +140,67 @@ class DownloadManager:
                     task.state = CANCELLED
                 elif task.ref.video_id == video_id and task.state == RUNNING:
                     self._cancel.set()
+
+    def cancel_all(self) -> None:
+        """Annule le téléchargement en cours et toute la file en attente.
+
+        Le fil de travail existant est respecté : il constate l'annulation
+        à la prochaine progression et reprend la file (désormais vide)."""
+        with self._lock:
+            for task in self._queue:
+                if task.state == PENDING:
+                    task.state = CANCELLED
+                elif task.state == RUNNING:
+                    self._cancel.set()
+            snapshot = list(self._queue)
+        for task in snapshot:
+            if task.state == CANCELLED:
+                self._notify(task)
+
+    def delete_all_files(self) -> int:
+        """Supprime les fichiers téléchargés par Triat ; renvoie leur nombre.
+
+        Le dossier est configurable et peut contenir la musique personnelle
+        de l'utilisateur : n'est supprimé que (a) ce que l'index `downloads`
+        connaît, avec les vignettes sœurs de même nom, (b) les fichiers dont
+        le nom se termine par « [id YouTube] » (nommage de Triat), (c) leurs
+        `.part`/`.ytdl`. Rien hors du dossier, aucun lien symbolique suivi,
+        aucun dossier supprimé (impossible de savoir lesquels Triat a créés)."""
+        root = downloads_dir()
+        if not root.is_dir() or root.is_symlink():
+            return 0
+        library = self._library
+        indexed: set[tuple[str, str]] = set()      # (dossier, stem) connus
+        if library is not None:
+            for video_id in library.downloaded_ids():
+                recorded = library.download_path(video_id)
+                if recorded:
+                    path = Path(recorded)
+                    indexed.add((str(path.parent), path.stem))
+        removed = 0
+        for folder, _dirs, names in os.walk(root, followlinks=False):
+            for name in names:
+                path = Path(folder) / name
+                suffix = path.suffix.lower()
+                if suffix not in _MANAGED_EXTENSIONS:
+                    continue
+                stem = path.stem
+                if suffix in _TEMP_EXTENSIONS:        # « x.opus.part »
+                    stem = Path(stem).stem
+                if (str(path.parent), stem) not in indexed \
+                        and not _TRIAT_STEM.search(stem):
+                    continue
+                try:
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    path.unlink()
+                    removed += 1
+                except OSError as exc:
+                    log.debug("Suppression impossible (%s) : %s", path, exc)
+        if library is not None:
+            for video_id in library.downloaded_ids():
+                library.forget_download(video_id)
+        return removed
 
     def clear_finished(self) -> None:
         with self._lock:
@@ -147,14 +229,26 @@ class DownloadManager:
 
     @staticmethod
     def _stems(ref: TrackRef) -> list[str]:
-        """Noms de fichier possibles pour cette piste."""
-        return [safe_name(ref.title, ref.video_id)]
+        """Noms de fichier possibles, le plus récent d'abord.
+
+        « titre [video_id] » évite qu'un même titre écrase une autre vidéo ;
+        l'ancien nom (titre seul) reste en second pour les fichiers déjà
+        téléchargés."""
+        title = safe_name(ref.title, ref.video_id)
+        return [f"{title} [{safe_name(ref.video_id)}]", title]
 
     def local_path(self, ref: TrackRef) -> Path | None:
         """Fichier déjà téléchargé pour cette piste, s'il existe.
 
         L'index par `video_id` fait foi : le titre et l'album d'une piste
-        sont corrigés après sa première lecture, pas son identifiant."""
+        sont corrigés après sa première lecture, pas son identifiant.
+
+        Un fichier trouvé sur disque est réindexé : c'est voulu (fichier
+        présent = piste lisible hors ligne, même après un effacement de
+        l'index qui aurait gardé les fichiers). Les ids non YouTube
+        (SoundCloud) n'ont jamais de fichier local : aucune requête."""
+        if not is_downloadable_id(ref.video_id):
+            return None
         library = self._library
         if library is not None:
             recorded = library.download_path(ref.video_id)
@@ -195,10 +289,11 @@ class DownloadManager:
     # ---- Exécution -------------------------------------------------------
 
     def _ensure_worker(self) -> None:
-        if self._worker is not None and self._worker.is_alive():
-            return
-        self._worker = threading.Thread(target=self._run, daemon=True)
-        self._worker.start()
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                return
+            self._worker = threading.Thread(target=self._run, daemon=True)
+            self._worker.start()
 
     def _notify(self, task: Task) -> None:
         if self.on_change is not None:
@@ -207,30 +302,45 @@ class DownloadManager:
             except Exception as exc:
                 log.debug("Notification de téléchargement : %s", exc)
 
-    def _next_task(self) -> Task | None:
+    def _claim_next(self) -> Task | None:
+        """Prend la prochaine tâche (passée à RUNNING), ou None. Quand le
+        worker doit s'arrêter (file vide, pause), la décision de sortie et
+        `self._worker = None` se font dans le même verrou que le test de la
+        file : un `add()` concurrent voit alors soit la tâche prise ici, soit
+        un worker absent à relancer, jamais un worker mourant."""
         with self._lock:
-            return next((t for t in self._queue if t.state == PENDING), None)
-
-    def _run(self) -> None:
-        while not self._paused.is_set():
-            task = self._next_task()
+            task = None
+            if not self._paused.is_set():
+                task = next((t for t in self._queue if t.state == PENDING), None)
             if task is None:
-                return
+                if self._worker is threading.current_thread():
+                    self._worker = None
+                return None
             task.state = RUNNING
             task.progress = 0.0
             self._cancel.clear()
+            return task
+
+    def _run(self) -> None:
+        while True:
+            task = self._claim_next()
+            if task is None:
+                return
             self._notify(task)
             try:
                 path = self._download(task)
             except Exception as exc:
-                task.state = CANCELLED if self._cancel.is_set() else FAILED
-                task.error = str(exc).strip().splitlines()[0] if str(exc) else ""
-                log.info("Téléchargement échoué (%s) : %s",
-                         task.ref.video_id, task.error)
+                error = str(exc).strip().splitlines()[0] if str(exc) else ""
+                with self._lock:
+                    task.state = CANCELLED if self._cancel.is_set() else FAILED
+                    task.error = error
+                log.debug("Téléchargement échoué (%s) : %s",
+                         task.ref.video_id, error)
             else:
-                task.state = DONE
-                task.path = path
-                task.progress = 1.0
+                with self._lock:
+                    task.state = DONE
+                    task.path = path
+                    task.progress = 1.0
             self._notify(task)
 
     def _options(self, task: Task) -> dict:
@@ -273,17 +383,24 @@ class DownloadManager:
             "js_runtimes": {k: dict(v) for k, v in JS_RUNTIMES.items()},
         }
         if settings is not None and settings.get("download_cut_sponsorblock", True):
-            options["postprocessors"] = [{
-                "key": "SponsorBlock",
-                "categories": ["music_offtopic", "sponsor", "selfpromo", "intro",
-                               "outro", "interaction", "preview"],
-            }, {
-                "key": "ModifyChapters",
-                "remove_sponsor_segments": ["music_offtopic", "sponsor",
-                                            "selfpromo", "intro", "outro",
-                                            "interaction", "preview"],
-            }] + options["postprocessors"]
+            categories = self._cut_categories()
+            if categories:
+                options["postprocessors"] = [{
+                    "key": "SponsorBlock",
+                    "categories": categories,
+                }, {
+                    "key": "ModifyChapters",
+                    "remove_sponsor_segments": categories,
+                }] + options["postprocessors"]
         return options
+
+    def _cut_categories(self) -> list[str]:
+        """Catégories SponsorBlock à couper du fichier : celles dont la
+        politique est « sauter ». « Demander » et « ignorer » ne coupent
+        rien : un fichier ne peut pas poser la question."""
+        policies = (self._settings.get("sponsorblock_categories")
+                    if self._settings else None) or {}
+        return [cat for cat in CATEGORIES if policies.get(cat) == SKIP]
 
     def _on_progress(self, task: Task, data: dict) -> None:
         if self._cancel.is_set():

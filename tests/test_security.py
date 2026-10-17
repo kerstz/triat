@@ -3,8 +3,6 @@
 Ils existent pour empêcher une régression silencieuse, pas pour la forme.
 """
 
-import os
-import stat
 
 import pytest
 
@@ -88,59 +86,11 @@ def test_empty_headers_give_empty_list():
 
 # ---- Fichier de cookies ---------------------------------------------------
 
-def test_cookie_file_is_forced_to_0600_even_if_it_already_exists(tmp_path, monkeypatch):
-    """Un fichier préexistant trop permissif doit être resserré."""
-    from triat.core import auth
+def test_cookie_manager_has_no_plaintext_cookie_file_api():
     from triat.core.auth import CookieManager
 
-    store = {}
-    monkeypatch.setattr(auth.keyring, "set_password",
-                        lambda s, k, v: store.__setitem__((s, k), v))
-    monkeypatch.setattr(auth.keyring, "get_password",
-                        lambda s, k: store.get((s, k)))
-    monkeypatch.setattr(auth, "runtime_dir", lambda: tmp_path)
-
-    manager = CookieManager()
-    manager._runtime_path = tmp_path / "cookies.txt"
-    # Fichier laissé lisible par tout le monde par une exécution antérieure.
-    manager._runtime_path.write_text("ancien", encoding="utf-8")
-    manager._runtime_path.chmod(0o644)
-
-    source = tmp_path / "in.txt"
-    source.write_text(".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tv", encoding="utf-8")
-    manager.import_file(source)
-
-    path = manager.cookie_file()
-    mode = stat.S_IMODE(os.stat(path).st_mode)
-    assert mode == 0o600, f"attendu 0600, trouvé {oct(mode)}"
-
-
-def test_cookie_file_refuses_a_symlink(tmp_path, monkeypatch):
-    """Un lien symbolique à la place du fichier ne doit pas être suivi."""
-    from triat.core import auth
-    from triat.core.auth import CookieManager
-
-    store = {}
-    monkeypatch.setattr(auth.keyring, "set_password",
-                        lambda s, k, v: store.__setitem__((s, k), v))
-    monkeypatch.setattr(auth.keyring, "get_password",
-                        lambda s, k: store.get((s, k)))
-    monkeypatch.setattr(auth, "runtime_dir", lambda: tmp_path)
-
-    manager = CookieManager()
-    manager._runtime_path = tmp_path / "cookies.txt"
-    cible = tmp_path / "cible.txt"
-    cible.write_text("", encoding="utf-8")
-    manager._runtime_path.symlink_to(cible)
-
-    source = tmp_path / "in.txt"
-    source.write_text(".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tsecret", encoding="utf-8")
-    manager.import_file(source)
-    manager.cookie_file()
-
-    assert cible.read_text(encoding="utf-8") == "", \
-        "les cookies ne doivent pas avoir été écrits au bout du lien"
-    assert not manager._runtime_path.is_symlink()
+    assert not hasattr(CookieManager, "cookie_file")
+    assert not hasattr(CookieManager, "ytdlp_opts")
 
 
 # ---- Extraction -----------------------------------------------------------
@@ -443,7 +393,7 @@ def test_download_template_escapes_percent(tmp_path, monkeypatch):
     options = manager._options(task)
     name = yt_dlp.YoutubeDL({"outtmpl": options["outtmpl"], "quiet": True}) \
         .prepare_filename({"id": "zzz", "ext": "opus"})
-    assert name.endswith("50%(id)s off.opus")
+    assert name.endswith("50%(id)s off [abc].opus")
 
 
 def test_corrupted_library_is_quarantined_not_fatal(tmp_path):
@@ -495,3 +445,42 @@ def test_cookie_domain_match_is_not_a_suffix_match():
     from triat.core.auth import _is_youtube_domain
     assert _is_youtube_domain(".youtube.com") and _is_youtube_domain("music.youtube.com")
     assert not _is_youtube_domain("notyoutube.com")
+
+
+# ---- SoundCloud : hôtes média -------------------------------------------
+
+@pytest.mark.parametrize("url", [
+    "https://evil-sndcdn.com/x.jpg",          # suffixe sans point : refusé
+    "https://sndcdn.com.evil.org/x.jpg",      # domaine préfixé : refusé
+])
+def test_sndcdn_lookalike_domains_are_refused(url):
+    with pytest.raises(UnsafeURL):
+        safe_media_url(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://i1.sndcdn.com/artworks-000.jpg",
+    "https://playback.media-streaming.soundcloud.cloud/abc/playlist.m3u8",
+])
+def test_soundcloud_media_hosts_are_accepted(url):
+    assert safe_media_url(url) == url
+
+
+# ---- Aucune clé client_id en dur dans le dépôt -------------------------
+
+def test_no_hardcoded_soundcloud_client_id_in_repository():
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    pattern = re.compile(r'client_id\s*[:=]\s*"([0-9a-zA-Z]{32})"')
+    placeholder = "X" * 32
+    offenders = []
+    for folder in ("triat", "tests"):
+        for path in (root / folder).rglob("*"):
+            if path.suffix not in (".py", ".json", ".txt") or not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for match in pattern.finditer(text):
+                if match.group(1) != placeholder:
+                    offenders.append(str(path.relative_to(root)))
+    assert not offenders, f"client_id en dur trouvé dans : {offenders}"

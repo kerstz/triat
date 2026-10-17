@@ -1,0 +1,6 @@
+# Outils de test et de CI (jamais installés chez l'utilisateur final).
+# PyGObject vient des paquets système (voir .github/workflows/ci.yml).
+pytest>=8
+pip-audit>=2.7
+ruff>=0.6
+PyYAML>=6      # tests statiques du manifeste Flatpak

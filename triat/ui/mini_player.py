@@ -17,6 +17,7 @@ from gi.repository import Adw, Gtk
 from .track_list import format_time
 from .widgets.cover import Cover
 from .widgets.dot_progress import DotProgressBar
+from ..i18n import _
 
 WIDTH = 440
 HEIGHT = 168
@@ -34,7 +35,7 @@ class MiniPlayer(Adw.ApplicationWindow):
     """Télécommande compacte."""
 
     def __init__(self, app, engine, on_expand=None) -> None:
-        super().__init__(application=app, title="Triat — mini")
+        super().__init__(application=app, title=_("Triat — mini"))
         self._engine = engine
         self._on_expand = on_expand
 
@@ -46,7 +47,7 @@ class MiniPlayer(Adw.ApplicationWindow):
         cover = Cover(size=COVER, radius=6.0)
         self.cover = cover
 
-        self._title = _label("Rien en lecture", "triat-display", "xs")
+        self._title = _label(_("Rien en lecture"), "triat-display", "xs")
         self._title.set_ellipsize(3)
         self._title.set_max_width_chars(18)
         self._artist = _label("", "triat-body", "triat-dim")
@@ -65,9 +66,9 @@ class MiniPlayer(Adw.ApplicationWindow):
         expand.add_css_class("circular")
         expand.set_size_request(32, 32)
         expand.set_valign(Gtk.Align.START)
-        expand.set_tooltip_text("Ouvrir la fenêtre principale")
+        expand.set_tooltip_text(_("Ouvrir la fenêtre principale"))
         expand.update_property([Gtk.AccessibleProperty.LABEL],
-                               ["Ouvrir la fenêtre principale"])
+                               [_("Ouvrir la fenêtre principale")])
         expand.connect("clicked", self._expand)
         top.append(expand)
 
@@ -76,9 +77,9 @@ class MiniPlayer(Adw.ApplicationWindow):
         self._elapsed = _label("0:00", "triat-mono", "triat-dim")
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self.prev_button = self._icon("triat-previous-symbolic", "Précédent", 32)
-        self.play_button = self._icon("triat-play-symbolic", "Lecture", 36, True)
-        self.next_button = self._icon("triat-next-symbolic", "Suivant", 32)
+        self.prev_button = self._icon("triat-previous-symbolic", _("Précédent"), 32)
+        self.play_button = self._icon("triat-play-symbolic", _("Lecture"), 36, True)
+        self.next_button = self._icon("triat-next-symbolic", _("Suivant"), 32)
         controls.append(self.prev_button)
         controls.append(self.play_button)
         controls.append(self.next_button)
@@ -184,13 +185,15 @@ class MiniPlayer(Adw.ApplicationWindow):
 
     def _on_track(self, _engine, ref) -> None:
         if ref is None:
-            self._title.set_text("Rien en lecture")
+            self._title.set_text(_("Rien en lecture"))
             self._artist.set_text("")
             self.cover.clear()
             self.progress.clear()
             return
-        self._title.set_text(ref.title)
-        self._artist.set_text(ref.artist or "")
+        self._title.set_text(ref.display_title)
+        self._artist.set_text(
+            _("{display_artist} · SoundCloud").format(display_artist=ref.display_artist)
+            if ref.source == "soundcloud" else ref.display_artist)
         self.cover.set_track(ref)
         self.progress.props.duration = ref.duration or 0.0
 
@@ -198,7 +201,7 @@ class MiniPlayer(Adw.ApplicationWindow):
         playing = state == "playing"
         self.play_button.set_icon_name(
             "triat-pause-symbolic" if playing else "triat-play-symbolic")
-        name = "Pause" if playing else "Lecture"
+        name = _("Pause") if playing else _("Lecture")
         self.play_button.set_tooltip_text(name)
         self.play_button.update_property([Gtk.AccessibleProperty.LABEL], [name])
         self.play_button.set_sensitive(state != "idle")

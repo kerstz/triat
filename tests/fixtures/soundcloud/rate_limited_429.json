@@ -1,0 +1,14 @@
+{
+  "errors": [
+    {
+      "error_message": "429 - Too Many Requests",
+      "meta": {
+        "rate_limit": {
+          "group": "fixture",
+          "max_requests": 1,
+          "time_window": "PT10M"
+        }
+      }
+    }
+  ]
+}

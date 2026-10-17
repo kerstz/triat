@@ -21,14 +21,14 @@ import time
 import urllib.error
 import urllib.request
 
-from .models import TrackRef
+from .constants import BROWSER_USER_AGENT
+from .models import TrackRef, parse_length
 from .net import read_capped, urlopen_checked
 
 log = logging.getLogger(__name__)
 
 WEB_HOST = "https://www.youtube.com"
-USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+USER_AGENT = BROWSER_USER_AGENT
 
 # Flux d'accueil recommandé pour un visiteur non connecté.
 BROWSE_HOME = "FEwhat_to_watch"
@@ -56,17 +56,7 @@ def _text(node) -> str:
 
 def _duration(node) -> float:
     raw = _text(node).strip()
-    if not raw:
-        return 0.0
-    parts = raw.split(":")
-    try:
-        numbers = [int(p) for p in parts]
-    except ValueError:
-        return 0.0
-    seconds = 0.0
-    for number in numbers:
-        seconds = seconds * 60 + number
-    return seconds
+    return parse_length(raw) if raw else 0.0
 
 
 def _thumbnail(node) -> str | None:
@@ -242,6 +232,10 @@ class InnerTube:
     @property
     def visitor_data(self) -> str | None:
         return self._visitor
+
+    def reset_visitor(self) -> None:
+        """Oublie l'identité de visiteur en mémoire (après « Tout effacer »)."""
+        self._visitor = None
 
     def _stored_visitor(self) -> str | None:
         if self._settings is None:

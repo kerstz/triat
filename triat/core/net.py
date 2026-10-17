@@ -12,11 +12,12 @@ from __future__ import annotations
 import contextvars
 import ipaddress
 import re
-import socket
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from .constants import BROWSER_USER_AGENT
 
 # Seuls schémas autorisés pour une ressource distante.
 SAFE_SCHEMES = ("https", "http")
@@ -29,7 +30,13 @@ _HEADER_FORBIDDEN = re.compile(r"[\r\n\x00]")
 MEDIA_HOST_SUFFIXES = (
     "youtube.com", "youtu.be", "ytimg.com", "ggpht.com",
     "googlevideo.com", "googleusercontent.com", "google.com",
+    "sndcdn.com", "media-streaming.soundcloud.cloud",
 )
+
+# Hôtes SoundCloud lus par l'API et le scraping. Le scraping utilise une
+# liste plus étroite (page exacte, scripts sur a-v2.sndcdn.com).
+SOUNDCLOUD_API_HOSTS = ("api-v2.soundcloud.com", "soundcloud.com",
+                        "a-v2.sndcdn.com")
 
 
 class UnsafeURL(ValueError):
@@ -110,24 +117,11 @@ def sanitize_headers(headers: dict) -> list[str]:
     return fields
 
 
-def resolve_is_public(host: str) -> bool:
-    """Résout un nom et vérifie qu'aucune adresse n'est privée.
-
-    Coûteux (appel DNS) : réservé aux URL d'origine inconnue.
-    """
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return False
-    return all(not _host_is_private(info[4][0]) for info in infos)
-
+# En-tête envoyé quand aucun n'est fourni par ailleurs.
+USER_AGENT_FALLBACK = BROWSER_USER_AGENT
 
 # Une réponse d'API légitime tient largement dedans ; au-delà, on coupe
 # plutôt que de remplir la mémoire avec ce qu'un serveur nous envoie.
-# En-tête envoyé quand aucun n'est fourni par ailleurs.
-USER_AGENT_FALLBACK = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 

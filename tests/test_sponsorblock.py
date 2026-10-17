@@ -182,3 +182,52 @@ def test_real_api_roundtrip():
     assert isinstance(segments, list)
     for seg in segments:
         assert seg.end > seg.start
+
+
+def _count(lib, table):
+    with lib._lock:
+        return lib._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+
+def test_private_session_writes_nothing(tmp_path, monkeypatch):
+    """Session privée : ni segment_fetches ni segments, mais un cache mémoire."""
+    from triat.core.library import Library
+
+    lib = Library(tmp_path / "t.db")
+    calls = {"n": 0}
+
+    def fake(request, **_kwargs):
+        calls["n"] += 1
+        return _Resp(json.dumps([{"videoID": request_id[0], "segments": [
+            {"segment": [0, 9], "category": "sponsor", "UUID": "u"}]}]).encode())
+
+    request_id = [""]
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    client = SponsorBlockClient(lib, is_private=lambda: True)
+    for vid in ("aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"):
+        request_id[0] = vid
+        assert len(client.segments_for(vid, ["sponsor"], 200.0)) == 1
+    assert _count(lib, "segment_fetches") == 0
+    assert _count(lib, "segments") == 0
+    # Le second appel vient de la mémoire.
+    before = calls["n"]
+    client.segments_for("ccccccccccc", ["sponsor"], 200.0)
+    assert calls["n"] == before
+    lib.close()
+
+
+def test_non_youtube_id_has_no_network_nor_write(tmp_path, monkeypatch):
+    from triat.core.library import Library
+
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **k: pytest.fail("aucun réseau attendu"))
+    lib = Library(tmp_path / "t.db")
+    client = SponsorBlockClient(lib)
+    assert client.segments_for("soundcloud:tracks:123", ["sponsor"]) == []
+    assert _count(lib, "segment_fetches") == 0
+    lib.close()
+
+
+class _Resp(__import__("io").BytesIO):
+    def __enter__(self): return self
+    def __exit__(self, *_): return False

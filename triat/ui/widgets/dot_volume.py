@@ -9,6 +9,7 @@ from __future__ import annotations
 from gi.repository import Gdk, GObject, Graphene, Gsk, Gtk
 
 from .dot_progress import rgba
+from ...i18n import _
 
 DOT_ON = "#f1f1f1"
 DOT_OFF_ALPHA = 0.25
@@ -55,7 +56,7 @@ class DotVolume(Gtk.Widget):
         keys.connect("key-pressed", self._on_key)
         self.add_controller(keys)
 
-        self.update_property([Gtk.AccessibleProperty.LABEL], ["Volume"])
+        self.update_property([Gtk.AccessibleProperty.LABEL], [_("Volume")])
         self._update_value()
 
     def _on_volume_notify(self, *_args) -> None:
@@ -68,7 +69,7 @@ class DotVolume(Gtk.Widget):
         self.update_property(
             [Gtk.AccessibleProperty.VALUE_MIN, Gtk.AccessibleProperty.VALUE_MAX,
              Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
-            [0.0, 100.0, level, f"Volume {round(level)} %"])
+            [0.0, 100.0, level, _("Volume {percent} %").format(percent=round(level))])
 
     # ---- Rendu -----------------------------------------------------------
 

@@ -13,6 +13,7 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gio, GObject, Gtk
 
+from ..core.display import canonical_key
 from ..core.models import TrackRef
 from .widgets.cover import Cover
 
@@ -61,8 +62,24 @@ class TrackGrid(Gtk.GridView):
     # ---- Modèle ----------------------------------------------------------
 
     def set_items(self, refs, badges=None) -> None:
-        """`badges` : libellé par piste (ALBUM, MIX…), ou None."""
+        """`badges` : libellé par piste (ALBUM, MIX…), ou None.
+
+        Avec `badges`, la grille ne montre pas de vraies pistes (couvertures
+        de playlists : l'index sert de clé côté appelant) : ni dédoublonnage
+        ni nettoyage du titre. Sinon, les doublons visuels (même
+        `canonical_key`) sont écartés, la première occurrence est gardée.
+        """
         badges = badges or {}
+        if not badges:
+            seen: set[str] = set()
+            unique = []
+            for ref in refs:
+                key = canonical_key(ref.title, ref.artist)
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(ref)
+            refs = unique
         items = [GridItem(ref, badges.get(ref.video_id, "")) for ref in refs]
         self._store.splice(0, self._store.get_n_items(), items)
 
@@ -99,10 +116,10 @@ class TrackGrid(Gtk.GridView):
         item = list_item.get_item()
         cover, title, artist = list_item._parts
         cover.set_track(item.ref)
-        title.set_text(item.ref.title)
+        title.set_text(item.ref.title if item.badge else item.ref.display_title)
         # Le libellé de type remplace l'artiste quand il y en a un.
         artist.set_text(item.badge if item.badge
-                        else (item.ref.artist or "—"))
+                        else (item.ref.display_artist or "—"))
         if item.badge:
             artist.add_css_class("triat-label")
         else:

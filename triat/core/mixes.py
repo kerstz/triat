@@ -15,11 +15,13 @@ import datetime as _dt
 import hashlib
 import math
 import random
+import threading
 import time
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from ..i18n import _, nformat
 from .models import TrackRef
 from .reco import (DAY, HALF_LIFE_PLAYS, SKIP_HALF_LIFE, TrackSignal,
                    artist_key, diversify, fatigue, is_blocked, score,
@@ -70,12 +72,13 @@ class Mix:
                 names.append(artist)
             if len(names) == 3:
                 break
-        count = f"{len(self.refs)} titre{'s' if len(self.refs) > 1 else ''}"
+        total = len(self.refs)
         if not names:
-            return count
-        joined = names[0] if len(names) == 1 else (
-            ", ".join(names[:-1]) + " et " + names[-1])
-        return f"{count}, avec {joined}"
+            return nformat("{n} titre", "{n} titres", total)
+        joined = names[0] if len(names) == 1 else _("{names} et {last}").format(
+            names=", ".join(names[:-1]), last=names[-1])
+        return nformat("{n} titre, avec {names}", "{n} titres, avec {names}",
+                       total, names=joined)
 
     def as_dict(self) -> dict:
         return {"key": self.key, "title": self.title, "seed": self.seed,
@@ -210,7 +213,7 @@ def build_mixes(library, today: _dt.date | None = None, *,
                              "fresh": fresh}, now, prev_daily, rng)
     daily_ids = {r.video_id for r in daily}
     mixes.append(Mix("daily", "Mix du jour", daily, seed,
-                     reason="Vos titres du moment, des retrouvailles et "
+                     reason="Tes titres du moment, des retrouvailles et "
                             "des inédits"))
     used = set(daily_ids)
 
@@ -271,7 +274,7 @@ def build_mixes(library, today: _dt.date | None = None, *,
         if len(picked) < MIN_ARTIST_TRACKS * 2:
             continue
         mixes.append(Mix(f"artist:{key}", f"Mix {display}", picked, seed,
-                         reason=f"Parce que vous écoutez {display}"))
+                         reason=f"Parce que tu écoutes {display}"))
         artist_ids.update(r.video_id for r in picked)
         made += 1
     used |= artist_ids
@@ -292,7 +295,7 @@ def build_mixes(library, today: _dt.date | None = None, *,
                          min_gap=1)[:MIX_SIZE]
     if len(discover) >= MIN_SECTION:
         mixes.append(Mix("fresh", "À découvrir", discover, day_seed,
-                         reason="Dans vos playlists, jamais écoutés"))
+                         reason="Dans tes playlists, jamais écoutés"))
         used |= {r.video_id for r in discover}
 
     # --- À réécouter : aimé, puis oublié ----------------------------------
@@ -326,6 +329,20 @@ class MixStore:
 
     def __init__(self, library) -> None:
         self._library = library
+        # Garde de génération : un get_or_build() en vol pendant reset()
+        # (ou un wipe, cf. `Library.epoch`) n'écrit pas son résultat.
+        self._generation = 0
+        self._guard = threading.Lock()
+
+    def _stamp(self) -> tuple[int, int]:
+        return self._generation, getattr(self._library, "epoch", 0)
+
+    def reset(self) -> None:
+        """Données effacées : jette les mixes figés et invalide les
+        constructions en cours."""
+        with self._guard:
+            self._generation += 1
+            self._library.reco_cache_clear(_CACHE_PREFIX)
 
     @staticmethod
     def _key(day: _dt.date) -> str:
@@ -396,8 +413,14 @@ class MixStore:
         cached = self.load(today)
         if cached is not None:
             return cached
+        token = self._stamp()
         mixes = build_mixes(self._library, today, now=now,
                             previous=self.previous(today))
         stamp = time.time() if now is None else now
-        self.save(today, mixes, self._library.count_owned(), stamp)
+        owned = self._library.count_owned()
+        with self._guard:
+            if token != self._stamp():
+                # Construits depuis un état effacé depuis : ni écrits ni servis.
+                return []
+            self.save(today, mixes, owned, stamp)
         return mixes

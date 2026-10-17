@@ -118,6 +118,25 @@ def test_sponsorblock_cut_is_configurable(manager):
     assert "SponsorBlock" not in keys
 
 
+def test_download_cut_follows_skip_policies_only(manager):
+    """Une catégorie « demander » ou « ignorer » n'est jamais coupée."""
+    manager._settings.set("sponsorblock_categories", {
+        "sponsor": "skip", "intro": "ask", "outro": "ignore",
+        "selfpromo": "skip"})
+    options = manager._options(Task(ref=TrackRef("j" * 11, "J", "A")))
+    by_key = {p["key"]: p for p in options["postprocessors"]}
+    assert by_key["SponsorBlock"]["categories"] == ["sponsor", "selfpromo"]
+    assert by_key["ModifyChapters"]["remove_sponsor_segments"] == [
+        "sponsor", "selfpromo"]
+
+
+def test_download_cut_skipped_when_no_category_is_skip(manager):
+    manager._settings.set("sponsorblock_categories", {"sponsor": "ask"})
+    options = manager._options(Task(ref=TrackRef("k" * 11, "K", "A")))
+    keys = [p["key"] for p in options["postprocessors"]]
+    assert "SponsorBlock" not in keys and "ModifyChapters" not in keys
+
+
 def test_format_selection(manager):
     task = Task(ref=TrackRef("i" * 11, "I", "A"))
     manager._settings.set("download_format", "mp3")
@@ -132,3 +151,139 @@ def test_download_is_silent(manager):
     options = manager._options(Task(ref=TrackRef("j" * 11, "J", "A")))
     assert options.get("quiet") is True
     assert options.get("noprogress") is True
+
+
+def test_add_restarts_worker_that_already_decided_to_exit(manager, tmp_path,
+                                                          monkeypatch):
+    """Course : le worker a vu la file vide mais n'est pas encore sorti
+    (is_alive() vrai). Un add() à cet instant ne doit pas laisser la tâche
+    PENDING sans worker."""
+    import threading
+    from pathlib import Path
+
+    decided, gate, done = threading.Event(), threading.Event(), threading.Event()
+    real_claim = manager._claim_next
+
+    def claim():
+        task = real_claim()
+        if task is None:
+            decided.set()
+            gate.wait(5)            # le fil reste vivant après sa décision
+        return task
+
+    def fake_download(task):
+        done.set()
+        return Path(tmp_path / "x.opus")
+
+    finished = threading.Event()
+    manager.on_change = lambda t: finished.set() if t.state == DONE else None
+    monkeypatch.setattr(manager, "_claim_next", claim)
+    monkeypatch.setattr(manager, "_download", fake_download)
+    try:
+        manager._ensure_worker()
+        assert decided.wait(5)
+        assert manager._worker is None       # sortie décidée sous verrou
+        assert manager.add([TrackRef("b" * 11, "Titre", "Artiste")]) == 1
+        assert done.wait(5), "aucun worker relancé : tâche restée PENDING"
+    finally:
+        gate.set()
+    assert finished.wait(5)
+    assert [t.state for t in manager.tasks] == [DONE]
+
+
+# ---- Lot W1-E ---------------------------------------------------------
+
+
+def test_cancel_all_empties_the_pending_queue(manager):
+    manager.pause()
+    manager.add([TrackRef("m" * 11, "M", "A"), TrackRef("n" * 11, "N", "A")])
+    manager.cancel_all()
+    assert [t.state for t in manager.tasks] == [CANCELLED, CANCELLED]
+
+
+def test_cancel_all_flags_the_running_task(manager):
+    manager.pause()
+    manager.add([TrackRef("o" * 11, "O", "A")])
+    manager.tasks[0].state = dl.RUNNING
+    manager.cancel_all()
+    assert manager._cancel.is_set()
+
+
+def test_delete_all_files_spares_personal_music(manager, tmp_path,
+                                                monkeypatch):
+    root = tmp_path / "dl"
+    outside = tmp_path / "dehors"
+    outside.mkdir()
+    (outside / "cible.opus").write_bytes(b"x")
+    root.mkdir()
+    (root / "A").mkdir()
+    vid = "a" * 11
+    (root / "A" / f"t [{vid}].opus").write_bytes(b"x")
+    (root / "A" / f"t [{vid}].jpg").write_bytes(b"x")
+    (root / "A" / f"t [{vid}].opus.part").write_bytes(b"x")
+    (root / "A" / "ma-chanson.mp3").write_bytes(b"perso")
+    (root / "A" / "perso.jpg").write_bytes(b"perso")
+    (root / "A" / f"lien [{'b' * 11}].opus").symlink_to(outside / "cible.opus")
+    (root / "lien_dossier").symlink_to(outside)
+    monkeypatch.setattr(dl, "downloads_dir", lambda: root)
+    assert manager.delete_all_files() == 3
+    assert (root / "A" / "ma-chanson.mp3").exists()
+    assert (root / "A" / "perso.jpg").exists()
+    assert (outside / "cible.opus").exists(), "lien symbolique non suivi"
+    assert (root / "A").is_dir(), "aucun dossier supprimé"
+
+
+def test_delete_all_files_removes_indexed_legacy_files(tmp_path, monkeypatch):
+    from triat.core.library import Library
+    root = tmp_path / "dl"
+    (root / "A").mkdir(parents=True)
+    old = root / "A" / "Ancien.m4a"
+    old.write_bytes(b"x")
+    (root / "A" / "Ancien.jpg").write_bytes(b"x")
+    (root / "A" / "Autre.m4a").write_bytes(b"perso")
+    monkeypatch.setattr(dl, "downloads_dir", lambda: root)
+    library = Library(tmp_path / "lib.db")
+    library.record_download("c" * 11, str(old))
+    manager = DownloadManager(library=library)
+    assert manager.delete_all_files() == 2
+    assert (root / "A" / "Autre.m4a").exists()
+    assert library.download_path("c" * 11) is None
+
+
+def test_new_files_carry_the_video_id_and_old_name_stays_second(manager):
+    ref = TrackRef("a" * 11, "Titre", "Artiste")
+    assert manager._stems(ref) == [f"Titre [{'a' * 11}]", "Titre"]
+
+
+def test_two_videos_with_the_same_title_do_not_collide(manager, tmp_path):
+    one = TrackRef("a" * 11, "Même", "Art")
+    two = TrackRef("b" * 11, "Même", "Art")
+    folder = tmp_path / "Art"
+    folder.mkdir()
+    (folder / f"Même [{'a' * 11}].opus").write_bytes(b"x")
+    assert manager.local_path(one) is not None
+    assert manager.local_path(two) is None
+
+
+def test_legacy_name_is_still_found(manager, tmp_path):
+    ref = TrackRef("a" * 11, "Ancien", "Art")
+    folder = tmp_path / "Art"
+    folder.mkdir()
+    (folder / "Ancien.opus").write_bytes(b"x")
+    assert manager.local_path(ref) == folder / "Ancien.opus"
+
+
+def test_non_youtube_ids_are_never_downloaded(manager):
+    refs = [TrackRef("soundcloud:123", "S", "A"), TrackRef("x:y", "T", "A"),
+            TrackRef("p" * 11, "P", "A")]
+    manager.pause()
+    assert manager.add(refs) == 1
+    assert [t.ref.video_id for t in manager.tasks] == ["p" * 11]
+
+
+def test_local_path_of_non_youtube_id_skips_the_database(manager):
+    class Boom:
+        def __getattr__(self, name):
+            raise AssertionError("requête SQL inattendue")
+    manager._library = Boom()
+    assert manager.local_path(TrackRef("soundcloud:9", "S", "A")) is None

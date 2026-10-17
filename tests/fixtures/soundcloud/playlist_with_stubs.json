@@ -1,0 +1,248 @@
+{
+  "kind": "playlist",
+  "id": 77,
+  "title": "Playlist de test",
+  "set_type": "",
+  "track_count": 12,
+  "permalink_url": "https://soundcloud.com/auteur-liste/sets/test",
+  "artwork_url": null,
+  "user": {
+    "id": 5,
+    "username": "Auteur Liste"
+  },
+  "tracks": [
+    {
+      "kind": "track",
+      "id": 2001,
+      "urn": "soundcloud:tracks:2001",
+      "title": "Complete 1",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH2001",
+      "permalink_url": "https://soundcloud.com/auteur-liste/titre-2001",
+      "artwork_url": "https://i1.sndcdn.com/artworks-2001-large.jpg",
+      "publisher_metadata": null,
+      "user": {
+        "id": 2901,
+        "username": "Auteur Liste",
+        "permalink_url": "https://soundcloud.com/auteur liste",
+        "avatar_url": "https://i1.sndcdn.com/avatars-2001-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2001/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "track",
+      "id": 2002,
+      "urn": "soundcloud:tracks:2002",
+      "title": "Complete 2",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH2002",
+      "permalink_url": "https://soundcloud.com/auteur-liste/titre-2002",
+      "artwork_url": "https://i1.sndcdn.com/artworks-2002-large.jpg",
+      "publisher_metadata": {
+        "artist": "Auteur Liste",
+        "album_title": "Album test"
+      },
+      "user": {
+        "id": 2902,
+        "username": "Auteur Liste",
+        "permalink_url": "https://soundcloud.com/auteur liste",
+        "avatar_url": "https://i1.sndcdn.com/avatars-2002-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2002/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "track",
+      "id": 2003,
+      "urn": "soundcloud:tracks:2003",
+      "title": "Complete 3",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH2003",
+      "permalink_url": "https://soundcloud.com/auteur-liste/titre-2003",
+      "artwork_url": "https://i1.sndcdn.com/artworks-2003-large.jpg",
+      "publisher_metadata": null,
+      "user": {
+        "id": 2903,
+        "username": "Auteur Liste",
+        "permalink_url": "https://soundcloud.com/auteur liste",
+        "avatar_url": "https://i1.sndcdn.com/avatars-2003-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2003/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "track",
+      "id": 2004,
+      "urn": "soundcloud:tracks:2004",
+      "title": "Complete 4",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH2004",
+      "permalink_url": "https://soundcloud.com/auteur-liste/titre-2004",
+      "artwork_url": "https://i1.sndcdn.com/artworks-2004-large.jpg",
+      "publisher_metadata": {
+        "artist": "Auteur Liste",
+        "album_title": "Album test"
+      },
+      "user": {
+        "id": 2904,
+        "username": "Auteur Liste",
+        "permalink_url": "https://soundcloud.com/auteur liste",
+        "avatar_url": "https://i1.sndcdn.com/avatars-2004-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2004/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "track",
+      "id": 2005,
+      "urn": "soundcloud:tracks:2005",
+      "title": "Complete 5",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "ALLOW",
+      "monetization_model": "FREE",
+      "track_authorization": "AUTH2005",
+      "permalink_url": "https://soundcloud.com/auteur-liste/titre-2005",
+      "artwork_url": "https://i1.sndcdn.com/artworks-2005-large.jpg",
+      "publisher_metadata": null,
+      "user": {
+        "id": 2905,
+        "username": "Auteur Liste",
+        "permalink_url": "https://soundcloud.com/auteur liste",
+        "avatar_url": "https://i1.sndcdn.com/avatars-2005-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2005/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          }
+        ]
+      }
+    },
+    {
+      "id": 3001,
+      "kind": "track",
+      "monetization_model": "NOT_APPLICABLE",
+      "policy": "ALLOW"
+    },
+    {
+      "id": 3002,
+      "kind": "track",
+      "monetization_model": "NOT_APPLICABLE",
+      "policy": "ALLOW"
+    },
+    {
+      "id": 3003,
+      "kind": "track",
+      "monetization_model": "NOT_APPLICABLE",
+      "policy": "ALLOW"
+    },
+    {
+      "id": 3004,
+      "kind": "track",
+      "monetization_model": "NOT_APPLICABLE",
+      "policy": "ALLOW"
+    },
+    {
+      "id": 3005,
+      "kind": "track",
+      "monetization_model": "NOT_APPLICABLE",
+      "policy": "ALLOW"
+    },
+    {
+      "id": 3006,
+      "kind": "track",
+      "monetization_model": "NOT_APPLICABLE",
+      "policy": "ALLOW"
+    },
+    {
+      "id": 3007,
+      "kind": "track",
+      "monetization_model": "NOT_APPLICABLE",
+      "policy": "ALLOW"
+    }
+  ]
+}

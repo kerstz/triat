@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 from typing import Any
@@ -40,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
     "scrobble_enabled": False,   # ListenBrainz
     "scrobble_user": "",
     "normalise_volume": True,    # égalise le volume perçu entre pistes
+    "pause_fade": True,          # fondu de ~200 ms à la pause et à la reprise
     "onboarding_done": False,    # écran de bienvenue déjà passé
     "download_format": "opus",          # opus | m4a | mp3
     "download_cut_sponsorblock": True,  # retirer les segments du fichier
@@ -53,8 +55,19 @@ DEFAULTS: dict[str, Any] = {
     # Sens de la synchro : "both" (bidirectionnel), "from_phone"
     # (téléphone -> PC seulement), "to_phone" (PC -> téléphone seulement).
     "sync_direction": "both",
+    # Refuser l'ancien format de requête (sans anti-rejeu) pour tous les
+    # téléphones. Désactivé par défaut : les vieilles versions de l'app
+    # mobile n'ont pas le format lié.
+    "sync_refuse_legacy": False,
     "eq_enabled": False,
     "eq_gains": [0.0] * 10,      # dB par bande, voir core/equalizer.py
+    # SoundCloud (opt-in explicite, voir docs/review/SPEC-SOUNDCLOUD-DESKTOP.md)
+    "soundcloud_enabled": False,
+    "soundcloud_tos_ack": False,          # avertissement CGU lu et accepté
+    "content_source": "youtube",          # youtube | soundcloud | both
+    "soundcloud_quality": "auto",         # auto | high | low
+    "source_badge": True,                 # badge de source sur les pochettes
+    "soundcloud_hide_unplayable": False,  # masquer Go+ / DRM au lieu de griser
 }
 
 
@@ -65,6 +78,8 @@ CHOICES: dict[str, tuple] = {
     "download_format": ("opus", "m4a", "mp3"),
     "immersion_mode": ("clip", "glyph"),
     "sync_direction": ("both", "from_phone", "to_phone"),
+    "content_source": ("youtube", "soundcloud", "both"),
+    "soundcloud_quality": ("auto", "high", "low"),
 }
 RANGES: dict[str, tuple[float, float]] = {
     "volume": (0.0, 100.0),
@@ -90,7 +105,7 @@ def _valid(key: str, value: Any) -> bool:
     if isinstance(default, (int, float)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return False
-        if value != value:                      # NaN
+        if isinstance(value, float) and math.isnan(value):  # NaN
             return False
         low, high = RANGES.get(key, (float("-inf"), float("inf")))
         return low <= value <= high
@@ -143,11 +158,26 @@ class Settings:
             tmp = self._path.with_suffix(".json.tmp")
             payload = json.dumps(dict(self._data), indent=2, ensure_ascii=False)
             try:
-                tmp.write_text(payload, encoding="utf-8")
-                tmp.chmod(0o600)
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    os.fchmod(handle.fileno(), 0o600)
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
                 os.replace(tmp, self._path)   # atomique
             except OSError as exc:
                 log.warning("Écriture des réglages impossible: %s", exc)
+                return
+            try:
+                dir_fd = os.open(self._path.parent, os.O_RDONLY)
+            except OSError:
+                return
+            try:
+                os.fsync(dir_fd)
+            except OSError:
+                pass
+            finally:
+                os.close(dir_fd)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._data.get(key, DEFAULTS.get(key, default))
@@ -159,6 +189,18 @@ class Settings:
     def update(self, **kwargs: Any) -> None:
         with self._lock:
             self._data.update(kwargs)
+
+    def delete(self, key: str) -> None:
+        """Retire une clé ; sans effet si elle est absente."""
+        with self._lock:
+            self._data.pop(key, None)
+
+    def effective_content_source(self) -> str:
+        """Source réellement active : « youtube » tant que SoundCloud n'est
+        pas activé, quelle que soit la valeur stockée."""
+        if not self.get("soundcloud_enabled"):
+            return "youtube"
+        return self.get("content_source")
 
     def as_dict(self) -> dict[str, Any]:
         return dict(self._data)

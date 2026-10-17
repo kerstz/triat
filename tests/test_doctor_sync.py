@@ -40,7 +40,8 @@ def test_activee_mais_serveur_arrete():
 def test_pare_feu_firewalld_propose_la_commande():
     niveau, texte = cli.message_synchro(True, True, ["firewalld"], 47823)
     assert niveau == "warn"
-    assert "firewall-cmd --add-port=47823/tcp" in texte
+    assert "firewall-cmd --permanent --add-port=47823/tcp" in texte
+    assert "--add-service=mdns" in texte and "--reload" in texte
     assert "ufw" not in texte
 
 
@@ -48,11 +49,12 @@ def test_pare_feu_ufw_propose_la_commande():
     niveau, texte = cli.message_synchro(True, True, ["ufw"], 47823)
     assert niveau == "warn"
     assert "ufw allow 47823/tcp" in texte
+    assert "ufw allow 5353/udp" in texte
 
 
 def test_les_deux_pare_feux_donnent_les_deux_commandes():
     _, texte = cli.message_synchro(True, False, ["firewalld", "ufw"], 5000)
-    assert "firewall-cmd --add-port=5000/tcp" in texte
+    assert "firewall-cmd --permanent --add-port=5000/tcp" in texte
     assert "ufw allow 5000/tcp" in texte
 
 
@@ -228,6 +230,7 @@ def test_ligne_synchro_activee(monkeypatch):
     valeurs = {"sync_enabled": True, "sync_port": 5555}
     monkeypatch.setattr(cli, "serveur_synchro_ecoute", lambda port, delai=1.0: port == 5555)
     monkeypatch.setattr(cli, "pare_feux_actifs", lambda *a, **k: ["ufw"])
+    monkeypatch.setattr(cli, "port_ecoute_reel", lambda: None)
     reglages = SimpleNamespace(get=lambda cle, defaut=None: valeurs.get(cle, defaut))
     nom, niveau, texte = cli._ligne_synchro(reglages)
     assert nom == "synchro"
@@ -247,3 +250,25 @@ def test_js_runtime_check_reports_missing_pieces(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/deno" if n == "deno" else None)
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
     assert cli.js_runtime_check()[1] == "ok"
+
+
+def test_ligne_synchro_lit_le_port_reel_du_fichier(monkeypatch, tmp_path):
+    """Après un repli de port, doctor sonde le port réellement lié."""
+    from triat.core import sync
+
+    fichier = tmp_path / "sync.port"
+    fichier.write_text("51234\n")
+    monkeypatch.setattr(sync, "port_file_path", lambda: fichier)
+    sondes = []
+    monkeypatch.setattr(cli, "serveur_synchro_ecoute",
+                        lambda port, delai=1.0: sondes.append(port) or True)
+    monkeypatch.setattr(cli, "pare_feux_actifs", lambda *a, **k: [])
+    reglages = SimpleNamespace(
+        get=lambda cle, defaut=None: {"sync_enabled": True}.get(cle, defaut))
+    _, niveau, texte = cli._ligne_synchro(reglages)
+    assert sondes == [51234]
+    assert "port 51234" in texte and niveau == "ok"
+    fichier.write_text("n'importe quoi")           # illisible : le réglage
+    sondes.clear()
+    cli._ligne_synchro(reglages)
+    assert sondes == [DEFAULT_PORT]

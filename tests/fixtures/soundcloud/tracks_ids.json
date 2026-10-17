@@ -1,0 +1,53 @@
+[
+  {
+    "kind": "track",
+    "id": 1002,
+    "urn": "soundcloud:tracks:1002",
+    "title": "Titre libre",
+    "duration": 200000,
+    "full_duration": 200000,
+    "streamable": true,
+    "policy": "MONETIZE",
+    "monetization_model": "BLACKBOX",
+    "track_authorization": "AUTH-FRAIS",
+    "permalink_url": "https://soundcloud.com/uploader-libre/titre-1002",
+    "artwork_url": "https://i1.sndcdn.com/artworks-1002-large.jpg",
+    "publisher_metadata": {
+      "artist": "Uploader Libre",
+      "album_title": "Album test"
+    },
+    "user": {
+      "id": 1902,
+      "username": "Uploader Libre",
+      "permalink_url": "https://soundcloud.com/uploader libre",
+      "avatar_url": "https://i1.sndcdn.com/avatars-1002-large.jpg",
+      "verified": false
+    },
+    "media": {
+      "transcodings": [
+        {
+          "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1002/hls/stream/aac_96k",
+          "preset": "aac_96k",
+          "duration": 200000,
+          "snipped": false,
+          "format": {
+            "protocol": "hls",
+            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+          },
+          "quality": "lq"
+        },
+        {
+          "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1002/hls/stream/abr",
+          "preset": "abr_sq",
+          "duration": 200000,
+          "snipped": false,
+          "format": {
+            "protocol": "hls",
+            "mime_type": "audio/mpegurl"
+          },
+          "quality": "sq"
+        }
+      ]
+    }
+  }
+]

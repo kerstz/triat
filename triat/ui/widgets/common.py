@@ -9,12 +9,27 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
 
 
+def animations_enabled(widget: Gtk.Widget | None = None) -> bool:
+    """Vrai si l'utilisateur n'a pas demandé de réduire les animations
+    (réglage `gtk-enable-animations`, relayé par les portails)."""
+    settings = None
+    if widget is not None:
+        try:
+            settings = widget.get_settings()
+        except Exception:  # noqa: BLE001 - widget détruit
+            settings = None
+    if settings is None:
+        settings = Gtk.Settings.get_default()
+    return True if settings is None else bool(
+        settings.get_property("gtk-enable-animations"))
+
+
 def plural(count: int, noun: str) -> str:
-    """« 1 titre », « 2 titres » : pluriel régulier en « s »."""
+    """« 1 titre », « 2 titres » (français, non traduisible).
+
+    Conservé pour compatibilité : les écrans utilisent `nformat`, qui
+    expose des msgid ngettext complets."""
     return f"{count} {noun}{'s' if count > 1 else ''}"
-
-
-_plural = plural
 
 
 def label(text: str, *css: str, **kwargs) -> Gtk.Label:

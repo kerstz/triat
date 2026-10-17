@@ -10,6 +10,7 @@ n'est interprétée ici : tout vient de `Recommender.remote_home`.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -37,6 +38,13 @@ class HomeFeed:
         self._recommender = recommender
         self._clock = clock
         self._retry_at = 0.0
+        # Garde de génération : un refresh() encore en vol pendant reset()
+        # (ou un wipe de la bibliothèque, cf. `Library.epoch`) n'écrit rien.
+        self._generation = 0
+        self._guard = threading.Lock()
+
+    def _stamp(self) -> tuple[int, int]:
+        return self._generation, getattr(self._library, "epoch", 0)
 
     def cached(self) -> HomeSnapshot | None:
         entry = self._library.reco_cache_get(CACHE_KEY)
@@ -72,25 +80,33 @@ class HomeFeed:
     def reset(self) -> None:
         """Cookies changés ou données effacées : le cache est jeté et le
         prochain rafraîchissement n'attend pas."""
-        self._retry_at = 0.0
-        self._library.reco_cache_clear("home:")
+        with self._guard:
+            self._generation += 1
+            self._retry_at = 0.0
+            self._library.reco_cache_clear("home:")
 
     def refresh(self) -> HomeSnapshot | None:
         """Interroge le réseau (bloquant). N'écrase le cache que par un
         résultat non vide ; sinon garde l'ancien et patiente `HOME_RETRY`."""
         now = self._clock()
+        stamp = self._stamp()
         try:
             source, sections = self._recommender.remote_home()
         except Exception as exc:
             log.info("Accueil distant indisponible : %s", exc)
             source, sections = "", []
-        if source and sections:
-            self._retry_at = 0.0
-            self._library.reco_cache_put(CACHE_KEY, {
-                "source": source,
-                "sections": [{"title": s.get("title", ""),
-                              "tracks": [t.as_dict() for t in s["tracks"]]}
-                             for s in sections]}, at=now)
-        else:
-            self._retry_at = now + HOME_RETRY
+        with self._guard:
+            if stamp != self._stamp():
+                # Données effacées ou cookies changés pendant la requête :
+                # la réponse appartient à l'ancien état, on la jette.
+                return self.cached()
+            if source and sections:
+                self._retry_at = 0.0
+                self._library.reco_cache_put(CACHE_KEY, {
+                    "source": source,
+                    "sections": [{"title": s.get("title", ""),
+                                  "tracks": [t.as_dict() for t in s["tracks"]]}
+                                 for s in sections]}, at=now)
+            else:
+                self._retry_at = now + HOME_RETRY
         return self.cached()

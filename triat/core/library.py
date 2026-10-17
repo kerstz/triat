@@ -23,9 +23,10 @@ from .reco import TrackSignal, artist_key
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4   # 2 : uid des playlists et traces de suppression (synchro)
+SCHEMA_VERSION = 5   # 2 : uid des playlists et traces de suppression (synchro)
 #                      3 : index des téléchargements par video_id
 #                      4 : index playlist_items(video_id), tables reco_*
+#                      5 : tracks.web_url (permalink SoundCloud)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -37,7 +38,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     thumbnail  TEXT,
     added_at   REAL NOT NULL,
     play_count INTEGER NOT NULL DEFAULT 0,
-    last_played REAL
+    last_played REAL,
+    web_url    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
@@ -163,10 +165,118 @@ _OWNED = """(EXISTS (SELECT 1 FROM playlist_items o WHERE o.video_id = {t}.video
     OR {t}.play_count > 0)"""
 
 
+def _streak(days_desc: Sequence[str]) -> int:
+    """Jours consécutifs (« AAAA-MM-JJ », plus récent d'abord) finissant
+    aujourd'hui, ou hier si rien aujourd'hui."""
+    from datetime import date, timedelta
+    if not days_desc:
+        return 0
+    expected = date.today()
+    if days_desc[0] != expected.isoformat():
+        expected -= timedelta(days=1)
+    count = 0
+    for text in days_desc:
+        if text != expected.isoformat():
+            break
+        count += 1
+        expected -= timedelta(days=1)
+    return count
+
+
 def _decay(age, half_life):
     """Poids d'un événement vieux de `age` secondes (fonction SQL
     `triat_decay`, disponible même sans les fonctions maths de SQLite)."""
     return 0.5 ** (max(float(age or 0.0), 0.0) / float(half_life))
+
+
+class _ClosedRow:
+    """Ligne rendue après `close()` : fausse, et tout y vaut 0, pour que
+    `row[0]`, `row["x"]` ou `if row` ne lèvent rien dans un fil en retard."""
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __getitem__(self, _key):
+        return 0
+
+    def keys(self) -> list:
+        return []
+
+
+class _ClosedCursor:
+    rowcount = 0
+    lastrowid = None
+
+    def fetchone(self):
+        return _ClosedRow()
+
+    def fetchall(self) -> list:
+        return []
+
+    def __iter__(self):
+        return iter(())
+
+
+_WRITE_WORDS = frozenset({
+    "INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "DROP", "ALTER", "VACUUM",
+})
+
+
+class _ClosedConnection:
+    """Remplace la connexion après `close()` : un fil de travail encore en
+    vol (complétion des durées, téléchargement, recherche) obtient des
+    résultats vides au lieu d'une `sqlite3.ProgrammingError`.
+
+    Les lectures sont silencieuses ; toute écriture reçue est perdue et
+    journalisée en WARNING, pour qu'une synchro en vol ne perde pas ses
+    données sans que personne ne le sache."""
+
+    def execute(self, sql="", *_args, **_kwargs):
+        words = str(sql).split(None, 1)
+        if words and words[0].upper() in _WRITE_WORDS:
+            log.warning("Écriture ignorée : bibliothèque déjà fermée (%s)",
+                        " ".join(str(sql).split())[:80])
+        return _ClosedCursor()
+
+    executemany = executescript = execute
+
+    def commit(self) -> None: ...
+    def rollback(self) -> None: ...
+    def close(self) -> None: ...
+    def create_function(self, *_args, **_kwargs) -> None: ...
+
+
+class LibraryTooNew(RuntimeError):
+    """La base a été écrite par une version plus récente de Triat : on
+    refuse d'y écrire (et on ne la met surtout pas de côté)."""
+
+
+# Codes SQLite signalant un fichier réellement abîmé.
+_CORRUPT_CODES = frozenset({"SQLITE_CORRUPT", "SQLITE_NOTADB"})
+# Codes transitoires ou d'environnement : la base est saine, on ne la touche pas.
+_BUSY_CODES = frozenset({"SQLITE_BUSY", "SQLITE_LOCKED"})
+
+
+def _error_name(exc: BaseException) -> str:
+    """Nom du code SQLite (`sqlite_errorname`, Python >= 3.11), avec repli
+    sur le texte du message pour les versions plus anciennes."""
+    name = getattr(exc, "sqlite_errorname", None)
+    if name:
+        return str(name)
+    text = str(exc).lower()
+    if "malformed" in text or "corrupt" in text:
+        return "SQLITE_CORRUPT"
+    if "not a database" in text:
+        return "SQLITE_NOTADB"
+    if "locked" in text or "busy" in text:
+        return "SQLITE_BUSY"
+    if "full" in text:
+        return "SQLITE_FULL"
+    if "readonly" in text or "read-only" in text:
+        return "SQLITE_READONLY"
+    if "unable to open" in text:
+        return "SQLITE_CANTOPEN"
+    return ""
 
 
 def _row_to_ref(row: sqlite3.Row) -> TrackRef:
@@ -177,24 +287,63 @@ def _row_to_ref(row: sqlite3.Row) -> TrackRef:
         duration=row["duration"],
         thumbnail=row["thumbnail"],
         album=row["album"],
+        web_url=row["web_url"] if "web_url" in row.keys() else None,
     )
 
 
 class Library:
-    def __init__(self, path=None) -> None:
+    def __init__(self, path=None, busy_timeout: float = 5.0) -> None:
         self._path = str(path or db_path())
         self._lock = threading.RLock()
         self._batch_depth = 0
+        self._closed = False
+        # Incrémenté par `wipe()` / `clear_history()` : un fil en vol compare
+        # l'époque lue avant son travail à l'actuelle pour ne pas réécrire
+        # des données périmées. Lecture sans verrou (entier, atomique).
+        self.epoch = 0
+        self._busy_timeout = busy_timeout
         try:
             self._open()
         except sqlite3.DatabaseError as exc:
-            # Fichier abîmé (coupure pendant une écriture, disque plein) :
-            # on le met de côté, récupérable, plutôt que de ne plus démarrer.
-            self._quarantine(exc)
-            self._open()
+            code = _error_name(exc)
+            if code in _BUSY_CODES:
+                # Autre processus en écriture : on patiente plus longtemps,
+                # puis on lève l'erreur sans toucher au fichier.
+                log.warning("Bibliothèque occupée (%s) : nouvelle tentative", exc)
+                self._open(timeout=self._busy_timeout * 6)
+            elif self._is_corrupt(exc, code):
+                # Fichier réellement abîmé (coupure pendant une écriture) :
+                # on le met de côté, récupérable, plutôt que de ne plus démarrer.
+                self._quarantine(exc)
+                self._open()
+            else:
+                # Disque plein, lecture seule, fichier inaccessible… : la base
+                # est probablement saine, on ne la renomme pas.
+                raise
 
-    def _open(self) -> None:
-        self._db = sqlite3.connect(self._path, check_same_thread=False)
+    def _is_corrupt(self, exc: Exception, code: str) -> bool:
+        """Vraie corruption : code explicite, ou, pour un code inconnu,
+        `PRAGMA quick_check` en échec. Les autres codes connus (disque
+        plein, lecture seule, accès impossible…) ne sont jamais une
+        corruption."""
+        if code in _CORRUPT_CODES:
+            return True
+        if code:
+            return False
+        try:
+            conn = sqlite3.connect(self._path, timeout=self._busy_timeout)
+            try:
+                rows = conn.execute("PRAGMA quick_check").fetchall()
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError as check_exc:
+            return _error_name(check_exc) in _CORRUPT_CODES
+        return not rows or rows[0][0] != "ok"
+
+    def _open(self, timeout: float | None = None) -> None:
+        self._db = sqlite3.connect(
+            self._path, check_same_thread=False,
+            timeout=self._busy_timeout if timeout is None else timeout)
         self._db.row_factory = sqlite3.Row
         self._db.create_function("triat_decay", 2, _decay, deterministic=True)
         try:
@@ -202,7 +351,7 @@ class Library:
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._migrate()
-        except sqlite3.DatabaseError:
+        except BaseException:
             self._db.close()
             raise
 
@@ -217,9 +366,43 @@ class Library:
         log.error("Bibliothèque illisible (%s) : mise de côté en "
                   "%s.corrompue-%s, nouvelle base créée", exc, self._path, stamp)
 
+    def corrupt_copies(self) -> list[Path]:
+        """Copies mises de côté par la quarantaine (`library.db.corrompue-*`,
+        avec leurs `-wal` / `-shm`), à côté de la base."""
+        if self._path == ":memory:":
+            return []
+        base = Path(self._path)
+        return sorted(p for p in base.parent.glob(f"{base.name}.corrompue-*")
+                      if p.is_file())
+
+    def delete_corrupt_copies(self) -> int:
+        """Supprime les copies mises de côté ; renvoie le nombre de fichiers
+        retirés (celles qu'on ne peut pas supprimer sont journalisées)."""
+        removed = 0
+        for path in self.corrupt_copies():
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                log.warning("Copie corrompue non supprimée (%s) : %s", path, exc)
+        return removed
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def close(self) -> None:
+        """Ferme la base. Les appels qui suivent (fils encore en vol) sont
+        sans effet et rendent des résultats vides, sans exception."""
         with self._lock:
-            self._db.close()
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self._db.close()
+            finally:
+                self._db = _ClosedConnection()
+            log.debug("Bibliothèque fermée")
 
     def _commit(self) -> None:
         # Dans un `batch()`, la validation est repoussée à la sortie.
@@ -249,6 +432,20 @@ class Library:
 
     def _migrate(self) -> None:
         with self._lock:
+            # Avant tout, sans rien écrire : une base plus récente que le code
+            # est refusée, pas modifiée ni mise de côté.
+            has_version = self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                " AND name = 'schema_version'").fetchone()
+            if has_version is not None:
+                found = self._db.execute(
+                    "SELECT MAX(version) AS v FROM schema_version").fetchone()
+                if found is not None and found["v"] is not None \
+                        and found["v"] > SCHEMA_VERSION:
+                    raise LibraryTooNew(
+                        f"La bibliothèque a été écrite par une version plus "
+                        f"récente de Triat (schéma {found['v']}, ce programme "
+                        f"connaît {SCHEMA_VERSION}) : mets Triat à jour.")
             self._db.executescript(SCHEMA)
             self._db.execute(
                 "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
@@ -258,15 +455,14 @@ class Library:
                 self._db.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
             elif row["version"] < SCHEMA_VERSION:
                 self._db.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
-            elif row["version"] > SCHEMA_VERSION:
-                log.warning(
-                    "Base écrite par une version plus récente (%s > %s)",
-                    row["version"], SCHEMA_VERSION,
-                )
             # v2 : identifiant stable des playlists, partagé entre appareils.
             columns = {r["name"] for r in self._db.execute("PRAGMA table_info(playlists)")}
             if "uid" not in columns:
                 self._db.execute("ALTER TABLE playlists ADD COLUMN uid TEXT")
+            # v5 : permalink SoundCloud. Sans contrainte, donc sans risque.
+            columns = {r["name"] for r in self._db.execute("PRAGMA table_info(tracks)")}
+            if "web_url" not in columns:
+                self._db.execute("ALTER TABLE tracks ADD COLUMN web_url TEXT")
             for row in self._db.execute(
                     "SELECT id FROM playlists WHERE uid IS NULL").fetchall():
                 self._db.execute("UPDATE playlists SET uid = ? WHERE id = ?",
@@ -279,22 +475,23 @@ class Library:
         """Enregistre ou rafraîchit une piste sans toucher aux compteurs."""
         if not ref.video_id:
             return
-        with self._lock:
+        with self.batch():
             self._db.execute(
                 """
                 INSERT INTO tracks (video_id, title, artist, album, duration,
-                                    thumbnail, added_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    thumbnail, added_at, web_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(video_id) DO UPDATE SET
                     title     = coalesce(NULLIF(excluded.title, ''), tracks.title),
                     artist    = coalesce(NULLIF(excluded.artist, ''), tracks.artist),
                     album     = coalesce(excluded.album, tracks.album),
                     duration  = CASE WHEN excluded.duration > 0
                                      THEN excluded.duration ELSE tracks.duration END,
-                    thumbnail = coalesce(excluded.thumbnail, tracks.thumbnail)
+                    thumbnail = coalesce(excluded.thumbnail, tracks.thumbnail),
+                    web_url   = coalesce(excluded.web_url, tracks.web_url)
                 """,
                 (ref.video_id, ref.title, ref.artist, ref.album,
-                 ref.duration, ref.thumbnail, time.time()),
+                 ref.duration, ref.thumbnail, time.time(), ref.web_url),
             )
             self._db.execute("UPDATE tracks SET title = 'Sans titre'"
                              " WHERE video_id = ? AND title = ''", (ref.video_id,))
@@ -494,7 +691,7 @@ class Library:
         """`at` : date de l'action, fournie par la synchro ; sinon maintenant."""
         self.upsert_track(ref)
         when = time.time() if at is None else at
-        with self._lock:
+        with self.batch():
             if favorite:
                 self._db.execute(
                     "INSERT OR IGNORE INTO favorites VALUES (?, ?)",
@@ -558,7 +755,7 @@ class Library:
     def delete_playlist(self, playlist_id: int, at: float | None = None) -> None:
         """`at` : date de la suppression chez son auteur (synchro) ;
         par défaut, maintenant."""
-        with self._lock:
+        with self.batch():
             row = self._db.execute("SELECT uid FROM playlists WHERE id = ?",
                                    (playlist_id,)).fetchone()
             if row is not None and row["uid"]:
@@ -640,7 +837,7 @@ class Library:
         if not refs:
             return 0
         self.upsert_many(refs)
-        with self._lock:
+        with self.batch():
             row = self._db.execute(
                 "SELECT coalesce(MAX(position), -1) AS m FROM playlist_items"
                 " WHERE playlist_id = ?",
@@ -677,7 +874,7 @@ class Library:
 
     def set_playlist_order(self, playlist_id: int, video_ids: Sequence[str]) -> None:
         """Réécrit l'ordre complet d'une playlist (drag & drop)."""
-        with self._lock:
+        with self.batch():
             self._db.execute(
                 "DELETE FROM playlist_items WHERE playlist_id = ?", (playlist_id,)
             )
@@ -697,7 +894,7 @@ class Library:
     def record_play(self, ref: TrackRef, seconds: float, completed: bool) -> None:
         self.upsert_track(ref)
         now = time.time()
-        with self._lock:
+        with self.batch():
             self._db.execute(
                 "INSERT INTO history (video_id, played_at, seconds, completed)"
                 " VALUES (?, ?, ?, ?)",
@@ -728,7 +925,7 @@ class Library:
         if known is not None:
             return False
         self.upsert_track(ref)
-        with self._lock:
+        with self.batch():
             self._db.execute(
                 "INSERT INTO history (video_id, played_at, seconds, completed)"
                 " VALUES (?, ?, ?, 0)", (ref.video_id, at, seconds))
@@ -807,7 +1004,7 @@ class Library:
         return [_row_to_ref(r) for r in ranked[:limit]]
 
     def clear_history(self) -> None:
-        with self._lock:
+        with self.batch():
             self._db.execute("DELETE FROM history")
             # Sauts et résultats en cache dérivent de l'historique ; la liste
             # « ne plus recommander » est un choix explicite : elle reste.
@@ -815,6 +1012,7 @@ class Library:
             self._db.execute("DELETE FROM reco_cache")
             self._db.execute("UPDATE tracks SET play_count = 0, last_played = NULL")
             self._commit()
+        self.epoch += 1
 
     # ---- Signaux de recommandation -------------------------------------
 
@@ -901,7 +1099,7 @@ class Library:
                       CASE WHEN h.completed = 1
                                 OR (t.duration > 0 AND h.seconds >= 0.8 * t.duration)
                                 THEN 1.0
-                           WHEN t.duration <= 0 THEN 0.6
+                           WHEN t.duration <= 0 OR h.seconds <= 0 THEN 0.6
                            WHEN h.seconds >= 0.3 * t.duration THEN 0.5
                            ELSE 0.2 END) AS affinity,
                     COUNT(*) AS plays, MAX(h.played_at) AS last_at
@@ -1025,7 +1223,7 @@ class Library:
     # ---- Cache SponsorBlock -------------------------------------------
 
     def cache_segments(self, video_id: str, segments: Sequence[Segment]) -> None:
-        with self._lock:
+        with self.batch():
             self._db.execute("DELETE FROM segments WHERE video_id = ?", (video_id,))
             self._db.executemany(
                 "INSERT OR REPLACE INTO segments"
@@ -1061,18 +1259,95 @@ class Library:
     def wipe(self) -> None:
         """Efface toutes les données utilisateur (bouton « effacer mes données »)."""
         with self._lock:
+            self.epoch += 1
             existing = {r["name"] for r in self._db.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'")}
-            for table in ("history", "playlist_items", "playlists", "favorites",
-                          "segments", "segment_fetches", "tracks", "sync_tombstones",
-                          "lyrics", "downloads", "reco_skips", "reco_blocklist",
-                          "reco_cache"):
-                if table in existing:
-                    self._db.execute(f"DELETE FROM {table}")
-            self._db.execute("INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild')")
-            self._commit()
+            with self.batch():
+                for table in ("history", "playlist_items", "playlists", "favorites",
+                              "segments", "segment_fetches", "tracks",
+                              "sync_tombstones", "lyrics", "downloads",
+                              "reco_skips", "reco_blocklist", "reco_cache"):
+                    if table in existing:
+                        self._db.execute(f"DELETE FROM {table}")
+                self._db.execute(
+                    "INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild')")
             self._db.execute("VACUUM")
             self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def purge_source(self, source: str) -> int:
+        """Efface toutes les données d'une source (« soundcloud ») : pistes,
+        favoris, éléments de playlist, historique, signaux reco et traces de
+        suppression. Renvoie le nombre de pistes supprimées."""
+        if source != "soundcloud":
+            raise ValueError(f"Source inconnue : {source!r}")
+        like = "soundcloud:%"
+        with self._lock:
+            existing = {r["name"] for r in self._db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            with self.batch():
+                # Tables sans clé étrangère vers `tracks`, puis `tracks`
+                # (les favoris et éléments de playlist partent en cascade,
+                # mais on les supprime explicitement par sûreté).
+                for table in ("favorites", "playlist_items", "history",
+                              "reco_skips", "segments", "segment_fetches",
+                              "downloads"):
+                    if table in existing:
+                        self._db.execute(
+                            f"DELETE FROM {table} WHERE video_id LIKE ?", (like,))
+                self._db.execute(
+                    "DELETE FROM reco_blocklist WHERE kind = 'track' AND key LIKE ?",
+                    (like,))
+                self._db.execute(
+                    "DELETE FROM sync_tombstones WHERE kind = 'like' AND key LIKE ?",
+                    (like,))
+                count = self._db.execute(
+                    "DELETE FROM tracks WHERE video_id LIKE ?", (like,)).rowcount
+                # Les caches dérivés (mixes, accueil) peuvent citer ces pistes.
+                self._db.execute("DELETE FROM reco_cache")
+                self._commit()
+        self.epoch += 1
+        return max(count, 0)
+
+    def prune_cache(self, older_than: float = 90 * 86400,
+                    now: float | None = None) -> dict[str, int]:
+        """Élague ce qui n'est que du cache : pistes entrées par une
+        recherche ou une radio et jamais gardées, segments SponsorBlock,
+        paroles et résultats de recommandation périmés.
+
+        Ne touche jamais à une piste écoutée, en favori, en playlist, dans
+        l'historique ou téléchargée. Renvoie le nombre de lignes retirées
+        par table.
+        """
+        cutoff = (time.time() if now is None else now) - older_than
+        removed = {"tracks": 0, "segment_fetches": 0, "segments": 0,
+                   "lyrics": 0, "reco_cache": 0}
+        with self.batch():
+            existing = {r["name"] for r in self._db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            removed["tracks"] = self._db.execute(
+                """
+                DELETE FROM tracks
+                WHERE play_count = 0 AND last_played IS NULL AND added_at < ?
+                  AND video_id NOT IN (SELECT video_id FROM playlist_items)
+                  AND video_id NOT IN (SELECT video_id FROM favorites)
+                  AND video_id NOT IN (SELECT video_id FROM history)
+                  AND video_id NOT IN (SELECT video_id FROM downloads)
+                """, (cutoff,)).rowcount
+            removed["segment_fetches"] = self._db.execute(
+                "DELETE FROM segment_fetches WHERE fetched_at < ?",
+                (cutoff,)).rowcount
+            removed["segments"] = self._db.execute(
+                "DELETE FROM segments WHERE video_id NOT IN "
+                "(SELECT video_id FROM segment_fetches)").rowcount
+            if "lyrics" in existing:
+                removed["lyrics"] = self._db.execute(
+                    "DELETE FROM lyrics WHERE fetched_at < ?",
+                    (cutoff,)).rowcount
+            removed["reco_cache"] = self._db.execute(
+                "DELETE FROM reco_cache WHERE created_at < ?",
+                (cutoff,)).rowcount
+            self._commit()
+        return {k: max(0, v) for k, v in removed.items()}
 
     def stats(self) -> dict:
         with self._lock:
@@ -1082,10 +1357,59 @@ class Library:
                        (SELECT COUNT(*) FROM favorites)  AS favorites,
                        (SELECT COUNT(*) FROM playlists)  AS playlists,
                        (SELECT COUNT(*) FROM history)    AS plays,
-                       (SELECT coalesce(SUM(seconds), 0) FROM history) AS seconds
+                       (SELECT coalesce(SUM(seconds), 0) FROM history
+                        WHERE seconds > 0) AS seconds
                 """
             ).fetchone()
         return dict(row)
+
+    def stats_period(self, since: float | None,
+                     until: float | None = None) -> dict:
+        """Statistiques d'écoute sur [since, until[ (None = sans borne).
+
+        Clés : `plays`, `seconds`, `days` (jours distincts, heure locale),
+        `streak` (jours consécutifs jusqu'à aujourd'hui, ou hier si rien
+        aujourd'hui, calculés sur tout l'historique), `top_tracks` et
+        `top_artists` (listes de 10 `(TrackRef | str, écoutes)`).
+
+        On compte les écoutes réelles de `history`, sans filtre `_OWNED` :
+        toute piste écoutée est « à soi » par définition (play_count > 0),
+        et le filtre ne ferait que coûter cher.
+
+        Limites : `seconds` somme `history.seconds`. Les écoutes synchronisées
+        depuis Android peuvent y porter la durée du titre au lieu du temps
+        écouté (TODO M1) ; `history` n'a aucune colonne d'origine pour les
+        distinguer, donc elles ne sont pas exclues. Aucune donnée de temps
+        économisé par SponsorBlock n'est enregistrée : non fourni.
+        """
+        where, args = "h.played_at >= ? AND h.played_at < ?", [
+            -math.inf if since is None else since,
+            math.inf if until is None else until]
+        day = "date(h.played_at, 'unixepoch', 'localtime')"
+        with self._lock:
+            head = self._db.execute(
+                f"SELECT COUNT(*) AS plays, coalesce(SUM(MAX(h.seconds, 0)), 0)"
+                f" AS seconds, COUNT(DISTINCT {day}) AS days"
+                f" FROM history h WHERE {where}", args).fetchone()
+            tracks = self._db.execute(
+                f"SELECT t.*, COUNT(*) AS n FROM history h"
+                f" JOIN tracks t ON t.video_id = h.video_id WHERE {where}"
+                f" GROUP BY h.video_id ORDER BY n DESC, MAX(h.played_at) DESC"
+                f" LIMIT 10", args).fetchall()
+            artists = self._db.execute(
+                f"SELECT t.artist AS artist, COUNT(*) AS n FROM history h"
+                f" JOIN tracks t ON t.video_id = h.video_id"
+                f" WHERE {where} AND t.artist <> ''"
+                f" GROUP BY t.artist ORDER BY n DESC, MAX(h.played_at) DESC"
+                f" LIMIT 10", args).fetchall()
+            all_days = [r[0] for r in self._db.execute(
+                f"SELECT DISTINCT {day} FROM history h ORDER BY 1 DESC")]
+        return {
+            "plays": head["plays"], "seconds": float(head["seconds"]),
+            "days": head["days"], "streak": _streak(all_days),
+            "top_tracks": [(_row_to_ref(r), r["n"]) for r in tracks],
+            "top_artists": [(r["artist"], r["n"]) for r in artists],
+        }
 
     # ---- Comptages (sans charger les lignes) --------------------------
 
@@ -1117,3 +1441,17 @@ class Library:
                 (since,)
             ).fetchone()
         return int(row[0])
+
+    # ---- Maintenance de la synchro -------------------------------------
+
+    def prune_tombstones(self, older_than: float, now: float | None = None) -> int:
+        """Oublie les traces de suppression plus vieilles que `older_than`
+        secondes (synchro : un appareil resté éteint plus longtemps pourrait
+        ressusciter l'élément). Renvoie le nombre de traces retirées."""
+        limit = (time.time() if now is None else now) - older_than
+        with self._lock:
+            cursor = self._db.execute(
+                "DELETE FROM sync_tombstones WHERE at < ?", (limit,))
+            removed = cursor.rowcount
+            self._commit()
+        return max(removed, 0)

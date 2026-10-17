@@ -75,3 +75,26 @@ def test_describe_reports_every_field():
     info = desktop.describe()
     assert set(info) == {"dotfiles", "config", "accent", "quickshell",
                          "hypr_custom", "display_font"}
+
+
+def test_focus_async_is_a_noop_outside_hyprland(monkeypatch):
+    monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
+    assert desktop.focus_under_hyprland_async("org.triat.Triat") is None
+
+
+def test_focus_async_runs_off_the_calling_thread(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "x")
+    seen = {}
+
+    def fake(app_id):
+        seen["thread"] = threading.current_thread()
+        return True
+
+    monkeypatch.setattr(desktop, "focus_under_hyprland", fake)
+    results = []
+    thread = desktop.focus_under_hyprland_async("id", results.append)
+    thread.join(2)
+    assert results == [True]
+    assert seen["thread"] is not threading.current_thread()

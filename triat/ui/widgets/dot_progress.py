@@ -7,6 +7,7 @@ s'allument un par un (DESIGN.md §5).
 from __future__ import annotations
 
 from gi.repository import Gdk, GObject, Graphene, Gsk, Gtk
+from ...i18n import _
 
 # Repères visuels de DESIGN.md §5. La couleur d'accent vient du CSS
 # (`.triat-progress { color: var(--triat-accent); }`), pas d'une constante.
@@ -238,7 +239,7 @@ class DotProgressBar(Gtk.Widget):
 
     def _update_accessible(self) -> None:
         self.update_property(
-            [Gtk.AccessibleProperty.LABEL], ["Progression de la lecture"])
+            [Gtk.AccessibleProperty.LABEL], [_("Progression de la lecture")])
 
     def _update_value(self) -> None:
         """Valeur courante pour les lecteurs d'écran, à la seconde près."""
@@ -253,7 +254,8 @@ class DotProgressBar(Gtk.Widget):
             [Gtk.AccessibleProperty.VALUE_MIN, Gtk.AccessibleProperty.VALUE_MAX,
              Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
             [0.0, duration, position,
-             f"{_clock(position)} sur {_clock(duration)}"])
+             _("{position} sur {duration}").format(
+                position=_clock(position), duration=_clock(duration))])
 
     def do_measure(self, orientation, _for_size):
         if orientation == Gtk.Orientation.VERTICAL:

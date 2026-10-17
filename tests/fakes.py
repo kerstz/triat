@@ -74,9 +74,6 @@ class FakePlayer(GObject.Object):
     def set_equalizer(self, gains) -> None:
         self.equalizer = tuple(gains) if gains else None
 
-    def set_speed(self, speed: float) -> None:
-        self.speed = speed
-
     def shutdown(self) -> None: ...
 
     # -- pilotage du test --
@@ -100,6 +97,8 @@ class FakeExtractor:
 
     def resolve(self, url: str) -> Track:
         video_id = url.rsplit("v=", 1)[-1]
+        if url.startswith("https://api.soundcloud.com/tracks/"):
+            video_id = "soundcloud:tracks:" + url.rsplit("/", 1)[-1]
         self.resolved.append(video_id)
         if video_id in self.fail_ids:
             raise RuntimeError(f"ERROR: {video_id} indisponible")
@@ -123,6 +122,68 @@ class FakeExtractor:
 
     def search(self, query: str, limit: int = 20) -> list[TrackRef]:
         return [TrackRef(f"s{i}", f"Résultat {i} pour {query}") for i in range(3)]
+
+
+class FakeSoundCloud:
+    """SoundCloudClient inerte : pistes en mémoire, appels enregistrés.
+
+    `unplayable={id: raison}` rend une piste non lisible ; `fail=True` fait
+    lever SoundCloudUnavailable à chaque appel.
+    """
+
+    def __init__(self, tracks=None, unplayable: dict[int, str] | None = None,
+                 fail: bool = False) -> None:
+        self._tracks = list(tracks or [])
+        self.unplayable = dict(unplayable or {})
+        self.fail = fail
+        self.calls: list[tuple] = []
+        self.permalinks: dict[str, object] = {}
+
+    def _enter(self, *call) -> None:
+        self.calls.append(call)
+        if self.fail:
+            from triat.core.soundcloud import SoundCloudUnavailable
+            raise SoundCloudUnavailable("SoundCloud injoignable (faux)")
+
+    @staticmethod
+    def make_track(number: int, title: str = "Titre SC"):
+        from triat.core.soundcloud import ScTrack
+        ref = TrackRef(f"soundcloud:tracks:{number}", title, "Auteur SC", 180.0,
+                       "https://exemple.invalide/art.jpg", None,
+                       f"https://soundcloud.com/auteur/t{number}")
+        return ScTrack(ref=ref, playable=True)
+
+    def search_tracks(self, q: str, limit: int = 20, **kw):
+        self._enter("search_tracks", q, limit)
+        return self._tracks[:limit]
+
+    def tracks(self, ids):
+        from dataclasses import replace
+        self._enter("tracks", tuple(ids))
+        found = []
+        for item in self._tracks:
+            number = int(item.ref.video_id.rsplit(":", 1)[1])
+            if number in ids:
+                reason = self.unplayable.get(number)
+                found.append(replace(item, playable=False, reason=reason)
+                             if reason else item)
+        return found
+
+    def stream(self, track_id_or_urn, quality: str = "auto"):
+        from triat.core.soundcloud import NotPlayable
+        self._enter("stream", track_id_or_urn, quality)
+        number = int(str(track_id_or_urn).rsplit(":", 1)[-1])
+        if number in self.unplayable:
+            raise NotPlayable(self.unplayable[number])
+        return f"https://exemple.invalide/sc{number}.mp3", {}
+
+    def user_tracks(self, user_id: int, limit: int = 50, **kw):
+        self._enter("user_tracks", user_id, limit)
+        return []
+
+    def resolve_permalink(self, url: str):
+        self._enter("resolve_permalink", url)
+        return self.permalinks[url]
 
 
 class FakeSponsorBlock:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from triat.core.home_feed import (HOME_MAX_STALE, HOME_RETRY, HOME_TTL,
@@ -110,3 +112,55 @@ def test_remote_home_falls_back_to_innertube_then_nothing(lib):
     assert source == "innertube" and signed_out.calls == 0
     assert sections[0]["tracks"][0].video_id == "i1"
     assert Recommender(lib, YT(False), innertube=IT()).remote_home() == ("", [])
+
+
+class BlockingReco:
+    """Recommender factice bloqué jusqu'à `release` (course déterministe)."""
+
+    def __init__(self, result):
+        self.result = result
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def remote_home(self):
+        self.started.set()
+        assert self.release.wait(5)
+        return self.result
+
+
+def _refresh_in_thread(feed, reco, interfere):
+    out = []
+    thread = threading.Thread(target=lambda: out.append(feed.refresh()))
+    thread.start()
+    assert reco.started.wait(5)
+    interfere()
+    reco.release.set()
+    thread.join(5)
+    return out[0]
+
+
+def test_refresh_in_flight_during_reset_does_not_write(lib):
+    reco = BlockingReco(("innertube", SECTIONS))
+    feed = HomeFeed(lib, reco, clock=Clock())
+    snap = _refresh_in_thread(feed, reco, feed.reset)
+    assert snap is None
+    assert lib.reco_cache_get("home:remote") is None
+    assert feed.needs_refresh()
+
+
+def test_refresh_in_flight_during_library_wipe_does_not_write(lib):
+    reco = BlockingReco(("innertube", SECTIONS))
+    feed = HomeFeed(lib, reco, clock=Clock())
+
+    def wipe():
+        lib.epoch = getattr(lib, "epoch", 0) + 1
+
+    _refresh_in_thread(feed, reco, wipe)
+    assert lib.reco_cache_get("home:remote") is None
+
+
+def test_refresh_without_interference_still_writes(lib):
+    reco = BlockingReco(("innertube", SECTIONS))
+    feed = HomeFeed(lib, reco, clock=Clock())
+    snap = _refresh_in_thread(feed, reco, lambda: None)
+    assert snap is not None and lib.reco_cache_get("home:remote") is not None

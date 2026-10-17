@@ -63,3 +63,78 @@ def test_set_position_validates_track_and_range(engine):
     assert engine.player.seeks == []
     service._set_position(track_object_path(ref.video_id), 5_000_000)
     assert engine.player.seeks == [5.0]
+
+
+def test_unpublish_disconnects_engine_handlers(engine):
+    service = make(engine)
+    bus = service._connection
+    assert service._handler_ids
+    service.unpublish()
+    assert service._handler_ids == []
+    bus.signals.clear()
+    engine.set_volume(30)
+    engine.emit("position-changed", 10.0)
+    assert bus.signals == [], "plus aucun signal après unpublish"
+
+
+def test_connect_engine_twice_does_not_double_handlers(engine):
+    service = make(engine)
+    service._connect_engine()
+    bus = service._connection
+    bus.signals.clear()
+    engine.set_volume(20)
+    assert len([s for s in bus.signals if s[1] == "PropertiesChanged"]) == 1
+
+
+def test_track_object_path_valide_pour_soundcloud():
+    path = track_object_path("soundcloud:tracks:123")
+    assert path == "/org/triat/Triat/track/soundcloud_tracks_123" or \
+        path.endswith("soundcloud_tracks_123")
+    assert ":" not in path
+
+
+def test_metadata_xesam_url_est_le_permalink(engine):
+    service = make(engine)
+    engine._current_ref = TrackRef("soundcloud:tracks:5", "T", "A", 10.0,
+                                   web_url="https://soundcloud.com/a/t")
+    assert service._metadata()["xesam:url"].unpack() == "https://soundcloud.com/a/t"
+    engine._current_ref = TrackRef("b" * 11, "T", "A", 10.0)
+    assert service._metadata()["xesam:url"].unpack().endswith("b" * 11)
+
+
+def _piste(ref):
+    return type("T", (), {"to_ref": lambda self: ref})()
+
+
+def test_openuri_soundcloud_joue_via_open_uri(engine, monkeypatch):
+    service = make(engine)
+    ref = TrackRef("soundcloud:tracks:7", "T", "A", 10.0)
+    monkeypatch.setattr("triat.services.mpris.GLib.idle_add",
+                        lambda fn, *a: fn(*a))
+    played = []
+    monkeypatch.setattr(engine, "play_refs",
+                        lambda refs, start=0: played.append(list(refs)))
+    service._play_soundcloud(lambda uri: _piste(ref), "https://soundcloud.com/a/t")
+    assert played == [[ref]]
+
+
+def test_openuri_soundcloud_desactive_ne_joue_rien(engine, monkeypatch, caplog):
+    from triat.core.extractor import ExtractionError
+    service = make(engine)
+    played = []
+    monkeypatch.setattr(engine, "play_refs", lambda *a, **k: played.append(a))
+
+    def refuse(uri):
+        raise ExtractionError("SoundCloud désactivé")
+
+    with caplog.at_level("WARNING"):
+        service._play_soundcloud(refuse, "https://soundcloud.com/a/t")
+    assert played == []
+    assert "refusé" in caplog.text
+
+
+def test_openuri_reconnait_les_permalinks_soundcloud(engine):
+    service = make(engine)
+    assert service._is_sc_permalink("https://soundcloud.com/a/t")
+    assert not service._is_sc_permalink("https://evil.example/soundcloud.com")
+    assert not service._is_sc_permalink("https://www.youtube.com/watch?v=x")

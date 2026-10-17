@@ -74,7 +74,8 @@ def _pair(engine) -> tuple[bytes, bytes]:
     return key, blob
 
 
-def test_wipe_waits_for_a_running_sync_and_nothing_comes_back(engine, monkeypatch):
+def test_wipe_waits_for_a_running_sync_and_nothing_comes_back(engine, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     engine.library.set_favorite(ref(A), True)
     _key, blob = _pair(engine)
     real_apply = sync_state.apply

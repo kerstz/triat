@@ -8,7 +8,7 @@ l'ancienne mise en page en trois colonnes les masquait.
 
 from __future__ import annotations
 
-from gi.repository import Gtk
+from gi.repository import GObject, GLib, Gtk
 
 from .track_list import TrackList, format_time
 from .lyrics_view import LyricsView
@@ -16,6 +16,7 @@ from .widgets.common import label
 from .widgets.dot_progress import DotProgressBar
 from .widgets.dot_volume import DotVolume
 from .widgets.glyph import GlyphArt
+from ..i18n import _
 
 ART_SIZE = 220
 ART_SIZE_WIDE = 300
@@ -75,15 +76,15 @@ class NowPlayingView(Gtk.Box):
         back = Gtk.Button(icon_name="triat-chevron-down-symbolic")
         back.add_css_class("flat")
         back.add_css_class("circular")
-        back.set_tooltip_text("Réduire (Ctrl+L)")
-        back.update_property([Gtk.AccessibleProperty.LABEL], ["Réduire"])
+        back.set_tooltip_text(_("Réduire (Ctrl+L)"))
+        back.update_property([Gtk.AccessibleProperty.LABEL], [_("Réduire")])
         back.connect("clicked", lambda *_: self._on_close and self._on_close())
         header.set_start_widget(back)
 
-        self.immersion_button = Gtk.Button(label="Plein écran")
+        self.immersion_button = Gtk.Button(label=_("Plein écran"))
         self.immersion_button.add_css_class("pill")
         self.immersion_button.set_tooltip_text(
-            "Clip ou matrice de points, en plein écran (Ctrl+I)")
+            _("Clip ou matrice de points, en plein écran (Ctrl+I)"))
         self.immersion_button.connect(
             "clicked", lambda *_: self._on_immersion and self._on_immersion())
         header.set_end_widget(self.immersion_button)
@@ -102,7 +103,7 @@ class NowPlayingView(Gtk.Box):
 
         words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
                         valign=Gtk.Align.END, hexpand=True)
-        self._title = label("Rien en lecture", "triat-display", "md",
+        self._title = label(_("Rien en lecture"), "triat-display", "md",
                             wrap=True, lines=3, ellipsize=3,
                             max_width_chars=28)
         words.append(self._title)
@@ -111,18 +112,29 @@ class NowPlayingView(Gtk.Box):
         artist_button.add_css_class("flat")
         artist_button.add_css_class("triat-link")
         artist_button.set_halign(Gtk.Align.START)
-        artist_button.set_tooltip_text("Voir l'artiste")
+        artist_button.set_tooltip_text(_("Voir l'artiste"))
         artist_button.connect("clicked", self._open_artist)
         self._artist_button = artist_button
         words.append(artist_button)
+
+        # Attribution SoundCloud : lien vers le permalink (masqué pour YouTube).
+        self._source_button = Gtk.Button(label=_("SoundCloud"))
+        self._source_button.add_css_class("flat")
+        self._source_button.add_css_class("triat-link")
+        self._source_button.set_halign(Gtk.Align.START)
+        self._source_button.set_tooltip_text(_("Ouvrir sur SoundCloud"))
+        self._source_button.set_visible(False)
+        self._source_button.connect("clicked", self._open_source)
+        self._source_ref = None
+        words.append(self._source_button)
 
         extras = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         extras.set_margin_top(10)
         self.favorite = Gtk.ToggleButton(icon_name="triat-heart-symbolic")
         self.favorite.add_css_class("flat")
         self.favorite.add_css_class("circular")
-        self.favorite.set_tooltip_text("Ajouter aux favoris")
-        self.favorite.update_property([Gtk.AccessibleProperty.LABEL], ["Favori"])
+        self.favorite.set_tooltip_text(_("Ajouter aux favoris"))
+        self.favorite.update_property([Gtk.AccessibleProperty.LABEL], [_("Favori")])
         self._favorite_handler = self.favorite.connect("toggled", self._on_favorite)
         extras.append(self.favorite)
         # Radio infinie : une puce, pas une carte avec interrupteur.
@@ -131,11 +143,11 @@ class NowPlayingView(Gtk.Box):
         radio_inner = Gtk.Box(spacing=7)
         radio_dot = Gtk.Box(css_classes=["triat-chip-dot"], valign=Gtk.Align.CENTER)
         radio_inner.append(radio_dot)
-        radio_inner.append(Gtk.Label(label="Radio infinie"))
+        radio_inner.append(Gtk.Label(label=_("Radio infinie")))
         self.radio_switch.set_child(radio_inner)
         self.radio_switch.set_valign(Gtk.Align.CENTER)
         self.radio_switch.set_tooltip_text(
-            "Poursuit la lecture quand la file se vide")
+            _("Poursuit la lecture quand la file se vide"))
         extras.append(self.radio_switch)
         words.append(extras)
         top.append(words)
@@ -158,28 +170,29 @@ class NowPlayingView(Gtk.Box):
         self.shuffle = Gtk.ToggleButton(icon_name="triat-shuffle-symbolic")
         self.shuffle.add_css_class("flat")
         self.shuffle.add_css_class("circular")
-        self.shuffle.set_tooltip_text("Lecture aléatoire")
+        self.shuffle.set_tooltip_text(_("Lecture aléatoire"))
         self.shuffle.update_property(
-            [Gtk.AccessibleProperty.LABEL], ["Lecture aléatoire"])
+            [Gtk.AccessibleProperty.LABEL], [_("Lecture aléatoire")])
         controls.set_start_widget(self.shuffle)
 
         centre = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10,
                          halign=Gtk.Align.CENTER)
-        self.prev_button = self._icon("triat-previous-symbolic", "Précédent", 40)
-        self.play_button = self._icon("triat-play-symbolic", "Lecture", 52,
+        self.prev_button = self._icon("triat-previous-symbolic", _("Précédent"), 40)
+        self.play_button = self._icon("triat-play-symbolic", _("Lecture"), 52,
                                       primary=True)
-        self.next_button = self._icon("triat-next-symbolic", "Suivant", 40)
+        self.next_button = self._icon("triat-next-symbolic", _("Suivant"), 40)
         for widget in (self.prev_button, self.play_button, self.next_button):
             centre.append(widget)
         controls.set_center_widget(centre)
 
         right = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
                         valign=Gtk.Align.CENTER)
+        right.append(self._build_sleep_timer())
         self.repeat = Gtk.Button(icon_name="triat-repeat-symbolic")
         self.repeat.add_css_class("flat")
         self.repeat.add_css_class("circular")
-        self.repeat.set_tooltip_text("Répétition : désactivée")
-        self.repeat.update_property([Gtk.AccessibleProperty.LABEL], ["Répétition"])
+        self.repeat.set_tooltip_text(_("Répétition : désactivée"))
+        self.repeat.update_property([Gtk.AccessibleProperty.LABEL], [_("Répétition")])
         right.append(self.repeat)
         self.volume = DotVolume()
         right.append(self.volume)
@@ -187,14 +200,117 @@ class NowPlayingView(Gtk.Box):
         column.append(controls)
         return column
 
+    def _build_sleep_timer(self) -> Gtk.Widget:
+        """Bouton « Minuterie » et son compte à rebours."""
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4,
+                      valign=Gtk.Align.CENTER)
+        self._sleep_label = label("", "triat-mono", "triat-sleep-countdown")
+        self._sleep_label.set_visible(False)
+        box.append(self._sleep_label)
+
+        self.sleep_button = Gtk.MenuButton(icon_name="alarm-symbolic")
+        self.sleep_button.add_css_class("flat")
+        self.sleep_button.add_css_class("circular")
+        self.sleep_button.set_tooltip_text(_("Minuterie"))
+        self.sleep_button.update_property([Gtk.AccessibleProperty.LABEL],
+                                          [_("Minuterie")])
+        pop = Gtk.Popover()
+        menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        menu.set_margin_top(6)
+        menu.set_margin_bottom(6)
+        menu.set_margin_start(6)
+        menu.set_margin_end(6)
+        self._sleep_popover = pop
+        self.sleep_items = {}
+        entries = [(_("{minutes} min").format(minutes=m), ("minutes", m))
+                   for m in (15, 30, 45, 60)]
+        entries += [(_("Fin du titre"), ("end_of_track", None)),
+                    (_("Fin de la file"), ("end_of_queue", None)),
+                    (_("Annuler la minuterie"), ("cancel", None))]
+        for text, choice in entries:
+            item = Gtk.Button(label=text)
+            item.add_css_class("flat")
+            item.get_child().set_xalign(0)
+            item.connect("clicked", self._on_sleep_choice, choice)
+            menu.append(item)
+            self.sleep_items[choice[0] if choice[1] is None else choice[1]] = item
+        self.sleep_items["cancel"].set_visible(False)
+        pop.set_child(menu)
+        self.sleep_button.set_popover(pop)
+        box.append(self.sleep_button)
+        self._sleep_state = None
+        self._sleep_source = 0
+        self.connect("destroy", lambda *_: self._stop_sleep_tick())
+        return box
+
+    def _on_sleep_choice(self, _button, choice) -> None:
+        self._sleep_popover.popdown()
+        engine = self._engine
+        if engine is None:
+            return
+        kind, value = choice
+        if kind == "minutes":
+            engine.set_sleep_timer(value)
+        elif kind == "end_of_track":
+            engine.set_sleep_timer(end_of_track=True)
+        elif kind == "end_of_queue":
+            engine.set_sleep_timer(end_of_queue=True)
+        else:
+            engine.cancel_sleep_timer()
+
+    def _on_sleep_changed(self, _engine, state) -> None:
+        self._sleep_state = state
+        active = bool(state)
+        self.sleep_items["cancel"].set_visible(active)
+        if not active:
+            self._stop_sleep_tick()
+            self._sleep_label.set_visible(False)
+            self._sleep_label.set_text("")
+            return
+        self._refresh_sleep_label()
+        if state.get("mode") == "minutes" and not self._sleep_source:
+            self._sleep_source = GLib.timeout_add_seconds(1, self._sleep_tick)
+        elif state.get("mode") != "minutes":
+            self._stop_sleep_tick()
+
+    def _sleep_tick(self) -> bool:
+        if not self._sleep_state:
+            self._sleep_source = 0
+            return False
+        self._refresh_sleep_label()
+        return True
+
+    def _stop_sleep_tick(self) -> None:
+        if self._sleep_source:
+            GLib.source_remove(self._sleep_source)
+            self._sleep_source = 0
+
+    def _refresh_sleep_label(self) -> None:
+        state = self._sleep_state
+        if not state:
+            return
+        mode = state.get("mode")
+        if state.get("fading"):
+            text = "fondu…"
+        elif mode == "end_of_track":
+            text = _("fin du titre")
+        elif mode == "end_of_queue":
+            text = _("fin de la file")
+        else:
+            remaining = self._engine.sleep_timer_remaining()
+            seconds = max(0, int(remaining or 0))
+            text = f"{seconds // 60:02d}:{seconds % 60:02d}"
+        self._sleep_label.set_text(text)
+        self._sleep_label.set_visible(True)
+
     def _build_tabs(self) -> Gtk.Widget:
         """À suivre / Paroles, en onglets."""
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
                          hexpand=True, vexpand=True)
         self._tabs_column = column
         chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.queue_chip = self._tab("À suivre")
-        self.lyrics_chip = self._tab("Paroles")
+        self.queue_chip = self._tab(_("À suivre"))
+        self.lyrics_chip = self._tab(_("Paroles"))
         self.lyrics_chip.set_group(self.queue_chip)
         self.queue_chip.set_active(True)
         chips.append(self.queue_chip)
@@ -277,6 +393,8 @@ class NowPlayingView(Gtk.Box):
         engine.connect("queue-changed", lambda *_: self._refresh_queue())
         engine.connect("options-changed", self._on_options)
         engine.connect("library-changed", self._on_library_changed)
+        if GObject.signal_lookup("sleep-timer-changed", type(engine)):
+            engine.connect("sleep-timer-changed", self._on_sleep_changed)
         self._refresh_queue()
         self.queue_list.set_favorite_checker(
             lambda ref: engine.library.is_favorite(ref.video_id))
@@ -311,9 +429,9 @@ class NowPlayingView(Gtk.Box):
         self._show_repeat()
 
     def _show_repeat(self) -> None:
-        libelle = {"off": "désactivée", "all": "la file", "one": "la piste"}
+        libelle = {"off": _("désactivée"), "all": _("la file"), "one": _("la piste")}
         mode = self._engine.repeat
-        self.repeat.set_tooltip_text(f"Répétition : {libelle[mode]}")
+        self.repeat.set_tooltip_text(_("Répétition : {mode}").format(mode=libelle[mode]))
         self.repeat.set_icon_name(
             "triat-repeat-one-symbolic" if mode == "one"
             else "triat-repeat-symbolic")
@@ -326,6 +444,28 @@ class NowPlayingView(Gtk.Box):
         self._engine.settings.set("autoplay_radio", state)
         self._engine.settings.save()
         return False
+
+    def _open_source(self, _button) -> None:
+        ref = self._source_ref
+        if ref is None or ref.source != "soundcloud":
+            return
+        try:
+            Gtk.UriLauncher(uri=ref.page_url).launch(
+                self.get_root(), None, None, None)
+        except Exception:
+            pass
+
+    def _show_source(self, ref) -> None:
+        """SoundCloud : attribution cliquable, pas de clip en plein écran."""
+        soundcloud = ref is not None and ref.source == "soundcloud"
+        self._source_ref = ref if soundcloud else None
+        self._source_button.set_visible(soundcloud)
+        self.immersion_button.set_sensitive(not soundcloud)
+        self.immersion_button.set_tooltip_text(
+            _("Pas de clip pour SoundCloud") if soundcloud else
+            _("Clip ou matrice de points, en plein écran (Ctrl+I)"))
+        if soundcloud:
+            self._artist.set_text(_("{display_artist} · SoundCloud").format(display_artist=ref.display_artist))
 
     def _open_artist(self, _button) -> None:
         ref = self._engine.current
@@ -343,7 +483,7 @@ class NowPlayingView(Gtk.Box):
         self.favorite.set_active(favorite)
         self.favorite.handler_unblock(self._favorite_handler)
         self.favorite.set_tooltip_text(
-            "Retirer des favoris" if favorite else "Ajouter aux favoris")
+            _("Retirer des favoris") if favorite else _("Ajouter aux favoris"))
         if favorite:
             self.favorite.add_css_class("triat-accent-text")
         else:
@@ -374,13 +514,15 @@ class NowPlayingView(Gtk.Box):
 
     def _on_track(self, _engine, ref) -> None:
         if ref is None:
-            self._title.set_text("Rien en lecture")
+            self._title.set_text(_("Rien en lecture"))
             self._artist.set_text("")
             self.disc.set_seed(7)
             self.progress.clear()
+            self._show_source(None)
             return
-        self._title.set_text(ref.title)
-        self._artist.set_text(ref.artist or "")
+        self._title.set_text(ref.display_title)
+        self._artist.set_text(ref.display_artist)
+        self._show_source(ref)
         self.disc.set_track(ref)
         self.progress.props.duration = ref.duration or 0.0
         self._total.set_text(format_time(ref.duration))
@@ -396,7 +538,7 @@ class NowPlayingView(Gtk.Box):
         self.play_button.set_icon_name(
             "triat-pause-symbolic" if playing
             else "triat-play-symbolic")
-        name = "Pause" if playing else "Lecture"
+        name = _("Pause") if playing else _("Lecture")
         self.play_button.set_tooltip_text(name)
         self.play_button.update_property([Gtk.AccessibleProperty.LABEL], [name])
         self.play_button.set_sensitive(state != "idle")

@@ -115,3 +115,28 @@ def test_a_network_failure_is_swallowed(scrobbler, monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", explode)
     scrobbler._post({"listen_type": "single", "payload": []})   # ne lève pas
+
+
+def test_clear_queue_empties_pending_but_keeps_the_token(tmp_path):
+    from triat.core.scrobble import Scrobbler
+    scrobbler = Scrobbler(None, queue_path=tmp_path / "q.json")
+    scrobbler._token_cache = "jeton"
+    scrobbler._enqueue({"listened_at": 1, "track_metadata": {"x": 1}})
+    assert scrobbler.pending()
+    scrobbler.clear_queue()
+    assert scrobbler.pending() == []
+    assert scrobbler._token_cache == "jeton"
+
+
+def test_metadata_soundcloud_cite_le_permalink(scrobbler):
+    ref = TrackRef("soundcloud:tracks:123", "T", "A", 200.0,
+                   web_url="https://soundcloud.com/a/t")
+    info = scrobbler._metadata(ref)["additional_info"]
+    assert info["music_service"] == "soundcloud.com"
+    assert info["origin_url"] == "https://soundcloud.com/a/t"
+
+
+def test_metadata_youtube_inchangee(scrobbler):
+    info = scrobbler._metadata(TrackRef("a" * 11, "T", "A"))["additional_info"]
+    assert info["music_service"] == "youtube.com"
+    assert info["origin_url"] == "https://www.youtube.com/watch?v=" + "a" * 11

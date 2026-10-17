@@ -262,3 +262,158 @@ def test_export_leaves_no_partial_file(tmp_path):
 
     export_playlist([TrackRef("d" * 11, "T")], tmp_path / "l.json")
     assert list(tmp_path.glob("*.part")) == []
+
+
+# ---- SoundCloud -------------------------------------------------------------
+
+from triat.core.importer import (  # noqa: E402
+    MAX_SC_LINKS,
+    export_playlist,
+    extract_soundcloud_url,
+    parse_entries,
+)
+from triat.core.models import TrackRef  # noqa: E402
+from triat.core.soundcloud import (  # noqa: E402
+    NotPlayable,
+    ScPlaylist,
+    ScTrack,
+    ScUser,
+)
+
+
+def _sc_ref(number: int) -> TrackRef:
+    return TrackRef(f"soundcloud:tracks:{number}", f"Titre {number}", "Moi",
+                    web_url=f"https://soundcloud.com/moi/titre-{number}")
+
+
+class FakeSc:
+    """Faux client SoundCloud : compte les appels, jamais de réseau."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def resolve_permalink(self, url):
+        self.calls.append(url)
+        if url.endswith("/sets/mon-set"):
+            return ScPlaylist(id=7, title="Mon set")
+        if url.endswith("/mort"):
+            raise NotPlayable("removed")
+        if "on.soundcloud.com" in url:
+            return ScTrack(_sc_ref(99), True)
+        if url.endswith("/profil"):
+            return ScUser(id=1, username="x")
+        number = len(self.calls)
+        return ScTrack(_sc_ref(number), True)
+
+    def playlist(self, playlist_id):
+        assert playlist_id == 7
+        return ScPlaylist(id=7, title="Mon set"), [
+            ScTrack(_sc_ref(701), True),
+            ScTrack(_sc_ref(702), False, "snip"),
+        ]
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("https://soundcloud.com/artiste/titre",
+     "https://soundcloud.com/artiste/titre"),
+    ("https://m.soundcloud.com/artiste/titre?si=abc",
+     "https://soundcloud.com/artiste/titre"),
+    ("https://soundcloud.com/artiste/sets/mon-set",
+     "https://soundcloud.com/artiste/sets/mon-set"),
+    ("https://on.soundcloud.com/AbC123", "https://on.soundcloud.com/AbC123"),
+    ("Titre,Moi,,0,https://soundcloud.com/a/b,soundcloud",
+     "https://soundcloud.com/a/b"),
+    ("https://soundcloud.com/artiste", None),
+    ("https://soundcloud.com/artiste/likes", None),
+    ("# https://soundcloud.com/a/b", None),
+    ("https://example.com/a/b", None),
+])
+def test_soundcloud_links_are_recognised(line, expected):
+    assert extract_soundcloud_url(line) == expected
+
+
+def test_youtube_id_is_anchored():
+    assert extract_video_id("https://youtu.be/dQw4w9WgXcQx") is None
+    assert extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ_x") is None
+    assert extract_video_id("https://youtu.be/dQw4w9WgXcQ&t=1") == "dQw4w9WgXcQ"
+
+
+def test_entries_mix_both_sources_in_order(tmp_path):
+    path = tmp_path / "mix.txt"
+    path.write_text("https://soundcloud.com/a/b\ndQw4w9WgXcQ\n"
+                    "https://soundcloud.com/a/b\n", encoding="utf-8")
+    assert parse_entries(path) == [("soundcloud", "https://soundcloud.com/a/b"),
+                                   ("youtube", "dQw4w9WgXcQ")]
+
+
+def test_import_resolves_track_set_and_short_link(tmp_path, fake_oembed):
+    path = tmp_path / "sc.txt"
+    path.write_text("https://soundcloud.com/moi/une\n"
+                    "https://soundcloud.com/moi/sets/mon-set\n"
+                    "https://on.soundcloud.com/Code1\n"
+                    "https://soundcloud.com/moi/mort\n", encoding="utf-8")
+    lib = Library(tmp_path / "lib.db")
+    client = FakeSc()
+    pid, name, refs = (result := import_playlist(
+        path, lib, name="SC", soundcloud=client))
+    ids = [r.video_id for r in refs]
+    # Le set est développé, y compris sa piste non lisible (choix documenté).
+    assert ids == ["soundcloud:tracks:1", "soundcloud:tracks:701",
+                   "soundcloud:tracks:702", "soundcloud:tracks:99"]
+    # Le lien court est passé tel quel, sans redirection suivie.
+    assert "https://on.soundcloud.com/Code1" in client.calls
+    assert result.sc_failed == 1 and result.notes == ["1 liens SoundCloud illisibles"]
+    assert name == "SC" and pid
+
+
+def test_disabled_soundcloud_counts_ignored_links(tmp_path, fake_oembed):
+    path = tmp_path / "m.txt"
+    path.write_text("dQw4w9WgXcQ\nhttps://soundcloud.com/a/b\n"
+                    "https://soundcloud.com/a/c\n", encoding="utf-8")
+    result = import_playlist(path, Library(tmp_path / "lib.db"))
+    assert len(result.refs) == 1
+    assert result.sc_disabled == 2
+    assert "2 liens SoundCloud ignorés (SoundCloud désactivé)" in result.notes
+
+
+def test_only_soundcloud_links_and_disabled_is_refused(tmp_path):
+    path = tmp_path / "m.txt"
+    path.write_text("https://soundcloud.com/a/b\n", encoding="utf-8")
+    with pytest.raises(ImportError_, match="SoundCloud désactivé"):
+        import_playlist(path, Library(tmp_path / "lib.db"))
+
+
+def test_soundcloud_links_are_capped(tmp_path):
+    path = tmp_path / "gros.txt"
+    path.write_text("\n".join(f"https://soundcloud.com/a/t{i}"
+                              for i in range(MAX_SC_LINKS + 5)),
+                    encoding="utf-8")
+    client = FakeSc()
+    result = import_playlist(path, Library(tmp_path / "lib.db"),
+                             soundcloud=client)
+    assert MAX_SC_LINKS == 200
+    assert len(client.calls) == 200
+    assert result.sc_over_limit == 5
+    assert len(result.refs) == 200
+
+
+def test_export_uses_page_url_and_source(tmp_path):
+    refs = [_sc_ref(5), TrackRef("a" * 11, "Yt")]
+    for fmt in ("m3u8", "txt"):
+        body = export_playlist(refs, tmp_path / f"l.{fmt}").read_text()
+        assert "https://soundcloud.com/moi/titre-5" in body
+        assert "api.soundcloud.com" not in body
+        assert "https://www.youtube.com/watch?v=" + "a" * 11 in body
+    data = json.loads(export_playlist(refs, tmp_path / "l.json").read_text())
+    assert [d["source"] for d in data] == ["soundcloud", "youtube"]
+    rows = export_playlist(refs, tmp_path / "l.csv").read_text().splitlines()
+    assert rows[0].endswith(",url,source")
+    assert rows[1].endswith(",https://soundcloud.com/moi/titre-5,soundcloud")
+
+
+def test_exported_soundcloud_files_can_be_reimported(tmp_path):
+    refs = [_sc_ref(5)]
+    for fmt in ("m3u8", "txt", "csv", "json"):
+        path = export_playlist(refs, tmp_path / f"l.{fmt}")
+        assert parse_entries(path) == [
+            ("soundcloud", "https://soundcloud.com/moi/titre-5")]

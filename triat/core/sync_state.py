@@ -25,14 +25,28 @@ Règles :
 from __future__ import annotations
 
 import math
+import re
+import time
 
 from .models import TrackRef
 
 VERSION = 1
 HISTORY_LIMIT = 3000
+# Écart d'horloge toléré pour un horodatage reçu (même valeur que la fenêtre
+# de rejeu du serveur) : au-delà, la date est ramenée à « maintenant + fenêtre ».
+FUTURE_SLACK_MS = 10 * 60 * 1000
+NAME_LIMIT = 200
+# Protocole v1 : seuls les ids YouTube (11 caractères) voyagent.
+_SYNC_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 
 
 # ---- Pistes ----------------------------------------------------------------
+
+def is_syncable(video_id) -> bool:
+    """Vrai pour un id YouTube ; les pistes SoundCloud (ou autres) ne
+    voyagent jamais vers Android en protocole v1."""
+    return isinstance(video_id, str) and _SYNC_ID.fullmatch(video_id) is not None
+
 
 def track_to_wire(ref: TrackRef) -> dict:
     return {"id": ref.video_id, "title": ref.title, "artist": ref.artist,
@@ -53,7 +67,7 @@ def track_from_wire(data) -> TrackRef | None:
     if not isinstance(data, dict):
         return None
     video_id = data.get("id")
-    if not isinstance(video_id, str) or len(video_id) != 11:
+    if not is_syncable(video_id):
         return None                     # pas une vidéo YouTube : ignorée
     return TrackRef(video_id=video_id,
                     title=str(data.get("title") or "")[:300],
@@ -108,9 +122,14 @@ def merge(a: dict, b: dict) -> dict:
     }
 
 
-def sanitize(remote: dict) -> dict | None:
+def sanitize(remote: dict, now_ms: int | None = None) -> dict | None:
     """Instantané reçu : garde les éléments bien formés, refuse le reste.
-    None si la forme générale est fausse."""
+    None si la forme générale est fausse. Les horodatages sont bornés à
+    `now_ms + FUTURE_SLACK_MS` (`now_ms` injectable pour les tests) : une
+    horloge folle ne gagne pas indéfiniment et ses traces restent élaguables."""
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    ceiling = now_ms + FUTURE_SLACK_MS
     clean: dict = {"v": remote.get("v")}
     for name in ("playlists", "likes", "history"):
         items = remote.get(name, [])
@@ -129,6 +148,7 @@ def sanitize(remote: dict) -> dict | None:
                     item[stamp] = int(item[stamp])
                 except (TypeError, ValueError, OverflowError):
                     item[stamp] = 0
+                item[stamp] = min(item[stamp], ceiling)
         if not isinstance(item.get("tracks", []), list):
             item["tracks"] = []
         else:
@@ -138,8 +158,8 @@ def sanitize(remote: dict) -> dict | None:
             item["track"] = None
         if "seconds" in item:
             item["seconds"] = _num(item["seconds"])
-        if item.get("name") is not None and not isinstance(item["name"], str):
-            item["name"] = str(item["name"])[:200]
+        if item.get("name") is not None:
+            item["name"] = str(item["name"])[:NAME_LIMIT]
     return clean
 
 
@@ -149,7 +169,8 @@ def snapshot(library) -> dict:
     """Ce que le bureau sait, au format d'échange."""
     playlists = []
     for item in library.list_playlists():
-        refs = library.playlist_items(item["id"])
+        refs = [r for r in library.playlist_items(item["id"])
+                if is_syncable(r.video_id)]
         playlists.append({"uid": item["uid"], "name": item["name"],
                           "updated": _ms(item["updated_at"]), "deleted": False,
                           "tracks": [track_to_wire(r) for r in refs]})
@@ -159,13 +180,16 @@ def snapshot(library) -> dict:
 
     likes = [{"id": ref.video_id, "at": _ms(at), "liked": True,
               "track": track_to_wire(ref)}
-             for ref, at in library.favorites_with_dates()]
+             for ref, at in library.favorites_with_dates()
+             if is_syncable(ref.video_id)]
     likes += [{"id": vid, "at": _ms(at), "liked": False, "track": None}
-              for vid, at in library.tombstones("like").items()]
+              for vid, at in library.tombstones("like").items()
+              if is_syncable(vid)]
 
     history = [{"id": ref.video_id, "at": _ms(at), "seconds": seconds,
                 "track": track_to_wire(ref)}
-               for ref, at, seconds in library.history_entries(HISTORY_LIMIT)]
+               for ref, at, seconds in library.history_entries(HISTORY_LIMIT)
+               if is_syncable(ref.video_id)]
     return {"v": VERSION, "playlists": playlists, "likes": likes,
             "history": history}
 
@@ -205,13 +229,21 @@ def _apply(library, merged: dict) -> dict:
             playlist_id = mine["id"]
             if mine["name"] != playlist.get("name"):
                 library.rename_playlist(playlist_id, playlist.get("name") or mine["name"])
-        library.set_playlist_order(playlist_id, [r.video_id for r in refs])
+        # Port de `mergeLocalSongs` (Android) : les pistes non synchronisables
+        # (SoundCloud) restent à leur index d'origine, relues avant écriture.
+        order = [r.video_id for r in refs]
+        for i, ref in enumerate(library.playlist_items(playlist_id)):
+            if not is_syncable(ref.video_id):
+                order.insert(min(i, len(order)), ref.video_id)
+        library.set_playlist_order(playlist_id, order)
         library.set_playlist_updated(playlist_id, updated)
         changes["playlists"] += 1
 
     favorites = {ref.video_id: at for ref, at in library.favorites_with_dates()}
     for like in merged.get("likes", []):
         vid = like["id"]
+        if not is_syncable(vid):
+            continue                    # jamais de piste SoundCloud via le réseau
         liked_here = vid in favorites
         if like.get("liked") and not liked_here:
             ref = track_from_wire(like.get("track") or {})

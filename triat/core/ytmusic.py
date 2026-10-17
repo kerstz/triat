@@ -12,29 +12,12 @@ from __future__ import annotations
 import logging
 import threading
 
-from .models import TrackRef
+from .models import TrackRef, parse_length
 
 log = logging.getLogger(__name__)
 
 # Types d'items de recherche qui correspondent à des pistes jouables.
 PLAYABLE_TYPES = ("song", "video")
-
-
-def parse_length(value) -> float:
-    """Accepte 213, "3:33" ou "1:02:05" et renvoie des secondes."""
-    if value is None:
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    parts = str(value).strip().split(":")
-    try:
-        numbers = [int(p) for p in parts]
-    except ValueError:
-        return 0.0
-    seconds = 0.0
-    for number in numbers:
-        seconds = seconds * 60 + number
-    return seconds
 
 
 def _best_thumbnail(item: dict) -> str | None:
@@ -214,12 +197,6 @@ class YTMusicService:
                     and i.get("resultType") in PLAYABLE_TYPES]
         return refs_from_items(playable)
 
-    def search_raw(self, query: str, filter_: str | None = None,
-                   limit: int = 25) -> list[dict]:
-        """Résultats bruts (albums, artistes, playlists) pour les vues de navigation."""
-        result = self._call("search", query, filter=filter_, limit=limit)
-        return result if isinstance(result, list) else []
-
     def suggestions(self, query: str) -> list[str]:
         result = self._call("get_search_suggestions", query)
         return [s for s in (result or []) if isinstance(s, str)]
@@ -248,29 +225,6 @@ class YTMusicService:
                 sections.append({"title": section.get("title") or "", "tracks": tracks})
         return sections
 
-    # ---- Navigation ----------------------------------------------------
-
-    def album(self, browse_id: str) -> list[TrackRef]:
-        result = self._call("get_album", browse_id)
-        if not isinstance(result, dict):
-            return []
-        return refs_from_items(result.get("tracks"))
-
-    def playlist(self, playlist_id: str, limit: int = 200) -> list[TrackRef]:
-        result = self._call("get_playlist", playlist_id, limit=limit)
-        if not isinstance(result, dict):
-            return []
-        return refs_from_items(result.get("tracks"))
-
-    def artist_top_songs(self, channel_id: str) -> list[TrackRef]:
-        result = self._call("get_artist", channel_id)
-        if not isinstance(result, dict):
-            return []
-        songs = result.get("songs")
-        if isinstance(songs, dict):
-            return refs_from_items(songs.get("results"))
-        return []
-
     # ---- Compte (nécessite des cookies) --------------------------------
 
     def liked_songs(self, limit: int = 200) -> list[TrackRef]:
@@ -286,8 +240,3 @@ class YTMusicService:
             return []
         result = self._call("get_library_playlists", limit=limit)
         return result if isinstance(result, list) else []
-
-    def history(self) -> list[TrackRef]:
-        if not self.authenticated:
-            return []
-        return refs_from_items(self._call("get_history"))

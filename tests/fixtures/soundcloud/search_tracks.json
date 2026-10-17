@@ -1,0 +1,176 @@
+{
+  "collection": [
+    {
+      "kind": "track",
+      "id": 1001,
+      "urn": "soundcloud:tracks:1001",
+      "title": "Titre protege",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "MONETIZE",
+      "monetization_model": "AD_SUPPORTED",
+      "track_authorization": "AUTH1001",
+      "permalink_url": "https://soundcloud.com/label-officiel/titre-1001",
+      "artwork_url": "https://i1.sndcdn.com/artworks-1001-large.jpg",
+      "publisher_metadata": null,
+      "user": {
+        "id": 1901,
+        "username": "Label Officiel",
+        "permalink_url": "https://soundcloud.com/label officiel",
+        "avatar_url": "https://i1.sndcdn.com/avatars-1001-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1001/cbc-encrypted-hls/stream/hls",
+            "preset": "aac_160k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "cbc-encrypted-hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "sq"
+          },
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1001/ctr-encrypted-hls/stream/hls",
+            "preset": "aac_160k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "ctr-encrypted-hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "sq"
+          },
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1001/cbc-encrypted-hls/stream/hls96",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "cbc-encrypted-hls",
+              "mime_type": "audio/mp4"
+            },
+            "quality": "lq"
+          },
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1001/ctr-encrypted-hls/stream/abr",
+            "preset": "abr_sq",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "ctr-encrypted-hls",
+              "mime_type": "audio/mpegurl"
+            },
+            "quality": "sq"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "track",
+      "id": 1002,
+      "urn": "soundcloud:tracks:1002",
+      "title": "Titre libre",
+      "duration": 200000,
+      "full_duration": 200000,
+      "streamable": true,
+      "policy": "MONETIZE",
+      "monetization_model": "BLACKBOX",
+      "track_authorization": "AUTH1002",
+      "permalink_url": "https://soundcloud.com/uploader-libre/titre-1002",
+      "artwork_url": "https://i1.sndcdn.com/artworks-1002-large.jpg",
+      "publisher_metadata": {
+        "artist": "Uploader Libre",
+        "album_title": "Album test"
+      },
+      "user": {
+        "id": 1902,
+        "username": "Uploader Libre",
+        "permalink_url": "https://soundcloud.com/uploader libre",
+        "avatar_url": "https://i1.sndcdn.com/avatars-1002-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1002/hls/stream/aac_96k",
+            "preset": "aac_96k",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+            },
+            "quality": "lq"
+          },
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1002/hls/stream/abr",
+            "preset": "abr_sq",
+            "duration": 200000,
+            "snipped": false,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mpegurl"
+            },
+            "quality": "sq"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "track",
+      "id": 1003,
+      "urn": "soundcloud:tracks:1003",
+      "title": "Titre Go+",
+      "duration": 30000,
+      "full_duration": 320357,
+      "streamable": true,
+      "policy": "SNIP",
+      "monetization_model": "SUB_HIGH_TIER",
+      "track_authorization": "AUTH1003",
+      "permalink_url": "https://soundcloud.com/artiste-officiel/titre-1003",
+      "artwork_url": "https://i1.sndcdn.com/artworks-1003-large.jpg",
+      "publisher_metadata": null,
+      "user": {
+        "id": 1903,
+        "username": "Artiste Officiel",
+        "permalink_url": "https://soundcloud.com/artiste officiel",
+        "avatar_url": "https://i1.sndcdn.com/avatars-1003-large.jpg",
+        "verified": false
+      },
+      "media": {
+        "transcodings": [
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1003/preview/hls",
+            "preset": "mp3_1_0",
+            "duration": 200000,
+            "snipped": true,
+            "format": {
+              "protocol": "hls",
+              "mime_type": "audio/mpeg"
+            },
+            "quality": "sq"
+          },
+          {
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1003/preview/progressive",
+            "preset": "mp3_1_0",
+            "duration": 200000,
+            "snipped": true,
+            "format": {
+              "protocol": "progressive",
+              "mime_type": "audio/mpeg"
+            },
+            "quality": "sq"
+          }
+        ]
+      }
+    }
+  ],
+  "next_href": "https://api-v2.soundcloud.com/search/tracks?q=test&query_urn=soundcloud%3Asearch-autocomplete%3Aabc&limit=3&offset=3&client_id=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  "query_urn": "soundcloud:search-autocomplete:abc",
+  "total_results": 12
+}

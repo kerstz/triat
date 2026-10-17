@@ -15,8 +15,8 @@ from gi.repository import Gtk
 
 from .track_list import TrackList
 from .widgets.cards import seed_for
-from .widgets.common import plural
 from .widgets.glyph import GlyphArt
+from ..i18n import _, nformat
 
 
 def _label(text: str, *css: str, **kwargs) -> Gtk.Label:
@@ -34,6 +34,7 @@ class ArtistPage(Gtk.Box):
         self._on_play = on_play
         self._on_action = on_action
         self._artist = ""
+        self._seq = 0      # jeton : un résultat d'un ancien artiste est ignoré
 
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         column.set_margin_bottom(24)
@@ -57,13 +58,13 @@ class ArtistPage(Gtk.Box):
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         actions.set_margin_top(10)
-        self.play_all = Gtk.Button(label="Tout lire")
+        self.play_all = Gtk.Button(label=_("Tout lire"))
         self.play_all.add_css_class("suggested-action")
         self.play_all.connect("clicked", self._play_all)
         actions.append(self.play_all)
-        self.radio = Gtk.Button(label="Radio")
+        self.radio = Gtk.Button(label=_("Radio"))
         self.radio.add_css_class("pill")
-        self.radio.set_tooltip_text("Enchaîne sur des titres proches")
+        self.radio.set_tooltip_text(_("Enchaîne sur des titres proches"))
         self.radio.connect("clicked", self._start_radio)
         actions.append(self.radio)
         words.append(actions)
@@ -88,22 +89,28 @@ class ArtistPage(Gtk.Box):
 
     def show_artist(self, artist: str) -> None:
         self._artist = (artist or "").strip()
-        self.name.set_text(self._artist or "Artiste inconnu")
+        self.name.set_text(self._artist or _("Artiste inconnu"))
         self.art.set_seed(seed_for(self._artist or "?"))
         local = self._engine.library.tracks_by_artist(self._artist)
         self.tracks.set_tracks(local)
         self.status.set_text(
-            f"{plural(len(local), 'piste')} en bibliothèque"
-            if local else "Aucune piste en bibliothèque")
+            nformat("{n} piste en bibliothèque", "{n} pistes en bibliothèque",
+                    len(local))
+            if local else _("Aucune piste en bibliothèque"))
         self.play_all.set_sensitive(bool(local))
         self.radio.set_sensitive(bool(local))
         self._mark_current()
 
         # Complète en ligne sans bloquer, si la bibliothèque est maigre.
+        self._seq += 1
+        seq = self._seq
         if len(local) < 5 and self._artist:
-            self._engine.search_async(self._artist, self._on_found)
+            self._engine.search_async(
+                self._artist, lambda refs, error: self._on_found(refs, error, seq))
 
-    def _on_found(self, refs, error) -> None:
+    def _on_found(self, refs, error, seq: int | None = None) -> None:
+        if seq is not None and seq != self._seq:
+            return
         if error or not refs:
             return
         known = {t.video_id for t in self.tracks.tracks}
@@ -113,7 +120,8 @@ class ArtistPage(Gtk.Box):
         merged = self.tracks.tracks + extra[:20]
         self.tracks.set_tracks(merged)
         self.status.set_text(
-            f"{plural(len(merged), 'piste')}, complété en ligne")
+            nformat("{n} piste, complété en ligne",
+                    "{n} pistes, complété en ligne", len(merged)))
         self.play_all.set_sensitive(True)
         self.radio.set_sensitive(True)
         self._mark_current()

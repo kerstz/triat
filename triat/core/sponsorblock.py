@@ -12,18 +12,22 @@ import hashlib
 import json
 import math
 import logging
+import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Sequence
 
 from .models import Segment
+from .constants import APP_USER_AGENT
 from .net import read_capped, urlopen_checked
 
 log = logging.getLogger(__name__)
 
 API_BASE = "https://sponsor.ajay.app/api/skipSegments"
-USER_AGENT = "Triat/0.1 (+lecteur de musique de bureau)"
+USER_AGENT = APP_USER_AGENT
 HASH_PREFIX_LEN = 4
 
 # Catégories connues du service. L'ordre sert d'ordre d'affichage.
@@ -45,6 +49,17 @@ IGNORE = "ignore"
 # Garde-fous contre les données aberrantes de la base communautaire.
 MIN_SEGMENT_LENGTH = 0.8      # sauter moins d'une seconde ne vaut rien
 MAX_COVERAGE_RATIO = 0.9      # un segment couvrant ~toute la piste est suspect
+
+
+# Cache mémoire borné (session privée : rien n'est écrit en base).
+MEMORY_CACHE_SIZE = 64
+
+_YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+
+
+def is_youtube_id(video_id: str) -> bool:
+    """Un identifiant YouTube fait exactement 11 caractères [A-Za-z0-9_-]."""
+    return bool(_YOUTUBE_ID.fullmatch(video_id or ""))
 
 
 def video_hash_prefix(video_id: str, length: int = HASH_PREFIX_LEN) -> str:
@@ -90,8 +105,12 @@ class SponsorBlockClient:
     """Accès réseau + cache. Les appels réseau sont bloquants."""
 
     def __init__(self, library=None, timeout: float = 8.0,
-                 api_base: str = API_BASE) -> None:
+                 api_base: str = API_BASE, *,
+                 is_private: Callable[[], bool] | None = None) -> None:
         self._library = library
+        self._is_private = is_private
+        self._memory: OrderedDict[str, list[Segment]] = OrderedDict()
+        self._memory_lock = threading.Lock()
         self._timeout = timeout
         self._api_base = api_base
 
@@ -143,7 +162,17 @@ class SponsorBlockClient:
 
     def segments_for(self, video_id: str, categories: Sequence[str],
                      duration: float = 0.0) -> list[Segment]:
-        """Cache d'abord, réseau ensuite. Ne lève jamais."""
+        """Cache d'abord, réseau ensuite. Ne lève jamais.
+
+        Un id non YouTube (SoundCloud…) renvoie [] sans réseau ni écriture.
+        En session privée, la base est lue mais jamais écrite.
+        """
+        if not is_youtube_id(video_id):
+            return []
+        with self._memory_lock:
+            if video_id in self._memory:
+                self._memory.move_to_end(video_id)
+                return sanitize(self._memory[video_id], duration)
         if self._library is not None:
             cached = self._library.cached_segments(video_id)
             if cached is not None:
@@ -152,7 +181,17 @@ class SponsorBlockClient:
             fetched = self.fetch(video_id, categories)
         except Exception:
             return []
-        if self._library is not None:
+        try:
+            private = bool(self._is_private and self._is_private())
+        except Exception:
+            private = True
+        if private:
+            with self._memory_lock:
+                self._memory[video_id] = list(fetched)
+                self._memory.move_to_end(video_id)
+                while len(self._memory) > MEMORY_CACHE_SIZE:
+                    self._memory.popitem(last=False)
+        elif self._library is not None:
             # On mémorise aussi l'absence de segment, pour ne pas réinterroger.
             self._library.cache_segments(video_id, fetched)
         return sanitize(fetched, duration)

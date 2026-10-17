@@ -11,6 +11,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from ..core.equalizer import (BANDS, CUSTOM, FLAT, GAIN_MAX, GAIN_MIN,
                               PRESETS, match_preset, preset_gains)
+from ..i18n import _
 
 # Le filtre mpv est reconstruit à chaque application, ce qui provoque un
 # micro-silence : on attend que le curseur se stabilise.
@@ -23,14 +24,14 @@ def band_label(freq: int) -> str:
 
 class EqualizerGroup(Adw.PreferencesGroup):
     def __init__(self, engine) -> None:
-        super().__init__(title="Égaliseur",
-                         description="Dix bandes d'une octave, de 31 Hz à 16 kHz")
+        super().__init__(title=_("Égaliseur"),
+                         description=_("Dix bandes d'une octave, de 31 Hz à 16 kHz"))
         self._engine = engine
         self._pending = 0
         self._syncing = False
         enabled, gains = engine.equalizer
 
-        self.switch = Adw.SwitchRow(title="Activer l'égaliseur")
+        self.switch = Adw.SwitchRow(title=_("Activer l'égaliseur"))
         self.switch.set_active(enabled)
         self.switch.connect("notify::active", self._on_toggled)
         self.add(self.switch)
@@ -41,8 +42,8 @@ class EqualizerGroup(Adw.PreferencesGroup):
         model = Gtk.StringList()
         for _pid, label, _gains in PRESETS:
             model.append(label)
-        model.append("Personnalisé")
-        self.preset = Adw.ComboRow(title="Préréglage", model=model)
+        model.append(_("Personnalisé"))
+        self.preset = Adw.ComboRow(title=_("Préréglage"), model=model)
         self.preset.set_selected(self._preset_ids.index(match_preset(gains)))
         self.preset.connect("notify::selected", self._on_preset)
         self.add(self.preset)
@@ -58,7 +59,7 @@ class EqualizerGroup(Adw.PreferencesGroup):
         row.set_child(bands)
         self.add(row)
 
-        reset = Gtk.Button(label="Remettre à plat", valign=Gtk.Align.CENTER)
+        reset = Gtk.Button(label=_("Remettre à plat"), valign=Gtk.Align.CENTER)
         reset.add_css_class("flat")
         reset.connect("clicked", lambda _b: self._set_scales(FLAT, apply=True))
         self.set_header_suffix(reset)
@@ -78,9 +79,9 @@ class EqualizerGroup(Adw.PreferencesGroup):
         scale.set_size_request(-1, 140)
         scale.add_mark(0.0, Gtk.PositionType.LEFT, None)
         scale.set_value(gain)
-        scale.set_tooltip_text(f"{band_label(freq)} Hz")
+        scale.set_tooltip_text(_("{band_label} Hz").format(band_label=band_label(freq)))
         scale.update_property([Gtk.AccessibleProperty.LABEL],
-                              [f"{band_label(freq)} hertz"])
+                              [_("{band_label} hertz").format(band_label=band_label(freq))])
         scale.connect("value-changed", self._on_scale)
         self.scales.append(scale)
 

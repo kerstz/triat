@@ -20,6 +20,8 @@ from ..core.auth import CookieError
 from ..core.desktop import (browser_label, detect_browser_profiles,
                             inside_flatpak)
 from ..core.downloads import FORMATS
+from .settings_dialog import SoundCloudSwitch
+from ..i18n import _
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +83,7 @@ class OnboardingView(Gtk.Box):
         column.set_margin_end(40)
 
         wordmark = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        name = _label("triat", "triat-display", "nav")
+        name = _label(_("triat"), "triat-display", "nav")
         name.add_css_class("hero")
         wordmark.append(name)
         dot = Gtk.Box(valign=Gtk.Align.CENTER)
@@ -91,18 +93,18 @@ class OnboardingView(Gtk.Box):
         column.append(wordmark)
 
         column.append(_label(
-            "Toute la musique de YouTube. Sans publicité, sans intro parlée.",
+            _("Toute la musique de YouTube. Sans publicité, sans intro parlée."),
             "triat-body", wrap=True, max_width_chars=34))
 
         engagements = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         engagements.set_margin_top(20)
         for titre, detail in (
-            ("Local d'abord",
-             "Bibliothèque, playlists et historique restent sur votre machine."),
-            ("Aucune télémétrie",
-             "Rien n'est envoyé ailleurs que vers YouTube et SponsorBlock."),
-            ("SponsorBlock intégré",
-             "Les passages non musicaux sont sautés automatiquement."),
+            (_("Local d'abord"),
+             _("Bibliothèque, playlists et historique restent sur ta machine.")),
+            (_("Aucune télémétrie"),
+             _("Rien n'est envoyé ailleurs que vers YouTube et SponsorBlock.")),
+            (_("SponsorBlock intégré"),
+             _("Les passages non musicaux sont sautés automatiquement.")),
         ):
             ligne = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             marqueur = Gtk.Box(valign=Gtk.Align.START)
@@ -140,7 +142,7 @@ class OnboardingView(Gtk.Box):
 
         self._dots = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._step_dots = []
-        for _ in range(STEPS):
+        for _unused in range(STEPS):
             dot = Gtk.Box()
             dot.add_css_class("triat-chip-dot")
             dot.set_size_request(8, 8)
@@ -157,18 +159,18 @@ class OnboardingView(Gtk.Box):
 
         buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         buttons.set_margin_top(8)
-        self._previous = Gtk.Button(label="Précédent")
+        self._previous = Gtk.Button(label=_("Précédent"))
         self._previous.add_css_class("pill")
         self._previous.set_size_request(-1, 44)
         self._previous.connect("clicked", lambda *_: self._back())
         buttons.append(self._previous)
-        self._skip = Gtk.Button(label="Continuer sans compte")
+        self._skip = Gtk.Button(label=_("Continuer sans compte"))
         self._skip.add_css_class("pill")
         self._skip.set_size_request(-1, 44)
         self._skip.connect("clicked", lambda *_: self._next())
         buttons.append(self._skip)
         buttons.append(Gtk.Box(hexpand=True))
-        self._next_button = Gtk.Button(label="Suivant")
+        self._next_button = Gtk.Button(label=_("Suivant"))
         self._next_button.add_css_class("suggested-action")
         self._next_button.add_css_class("pill")
         self._next_button.set_size_request(-1, 44)
@@ -189,26 +191,26 @@ class OnboardingView(Gtk.Box):
 
     def _step_account(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.append(_label("Importer vos cookies", "triat-display", "sm"))
+        box.append(_label(_("Importer tes cookies"), "triat-display", "sm"))
         box.append(_label(
-            "Sans compte, la recherche, la lecture et SponsorBlock "
+            _("Sans compte, la recherche, la lecture et SponsorBlock "
             "fonctionnent. Les recommandations personnalisées, elles, "
-            "demandent une session YouTube.",
+            "demandent une session YouTube."),
             "triat-body", "triat-dim", wrap=True, max_width_chars=52))
 
         self._profiles = detect_browser_profiles(BROWSERS)
         detected = [name for name in BROWSERS if name in self._profiles]
         self._browser = Gtk.DropDown.new_from_strings(
             [browser_label(b) for b in detected]
-            or ["Aucun navigateur accessible" if inside_flatpak()
-                else "Aucun navigateur détecté"])
+            or [_("Aucun navigateur accessible") if inside_flatpak()
+                else _("Aucun navigateur détecté")])
         self._browser.set_sensitive(bool(detected))
         self._browser.update_property([Gtk.AccessibleProperty.LABEL],
-                                      ["Navigateur"])
+                                      [_("Navigateur")])
         self._detected = detected
         box.append(self._browser)
 
-        self._import = Gtk.Button(label="Importer depuis ce navigateur")
+        self._import = Gtk.Button(label=_("Importer depuis ce navigateur"))
         self._import.add_css_class("suggested-action")
         self._import.add_css_class("pill")
         self._import.set_size_request(-1, 44)
@@ -217,16 +219,16 @@ class OnboardingView(Gtk.Box):
         box.append(self._import)
 
         if detected:
-            note = ("Les cookies sont chiffrés dans le trousseau du "
-                    "système, jamais écrits en clair.")
+            note = (_("Les cookies sont chiffrés dans le trousseau du "
+                    "système, jamais écrits en clair."))
         elif inside_flatpak():
-            note = ("Triat tourne dans un bac à sable Flatpak : les profils "
-                    "de vos navigateurs lui sont invisibles. Continuez, puis "
-                    "importez un fichier cookies.txt depuis les réglages.")
+            note = (_("Triat tourne dans un bac à sable Flatpak : les profils "
+                    "de tes navigateurs lui sont invisibles. Continue, puis "
+                    "importe un fichier cookies.txt depuis les réglages."))
         else:
-            note = ("Aucun profil de navigateur trouvé. Continuez : vous "
-                    "pourrez importer un fichier cookies.txt depuis les "
-                    "réglages.")
+            note = (_("Aucun profil de navigateur trouvé. Continue : tu "
+                    "pourras importer un fichier cookies.txt depuis les "
+                    "réglages."))
         self._account_status = _label(
             note, "triat-body", "triat-dim", wrap=True, max_width_chars=52)
         box.append(self._account_status)
@@ -234,15 +236,15 @@ class OnboardingView(Gtk.Box):
 
     def _step_sponsorblock(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.append(_label("Sauter le hors-sujet", "triat-display", "sm"))
+        box.append(_label(_("Sauter le hors-sujet"), "triat-display", "sm"))
         box.append(_label(
-            "Triat saute les passages non musicaux : intros parlées, "
+            _("Triat saute les passages non musicaux : intros parlées, "
             "sponsors, rappels d'abonnement. Réglable catégorie par "
-            "catégorie dans les réglages.",
+            "catégorie dans les réglages."),
             "triat-body", "triat-dim", wrap=True, max_width_chars=52))
 
-        row = Adw.SwitchRow(title="Sauter les segments",
-                            subtitle="Recommandé")
+        row = Adw.SwitchRow(title=_("Sauter les segments"),
+                            subtitle=_("Recommandé"))
         row.set_active(bool(self._engine.settings.get("sponsorblock_enabled")))
         row.connect("notify::active", lambda r, _p: self._set(
             "sponsorblock_enabled", r.get_active()))
@@ -253,15 +255,15 @@ class OnboardingView(Gtk.Box):
 
     def _step_quality(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.append(_label("Qualité audio", "triat-display", "sm"))
+        box.append(_label(_("Qualité audio"), "triat-display", "sm"))
         box.append(_label(
-            "Opus offre le meilleur rapport qualité-débit. Ce choix concerne "
+            _("Opus offre le meilleur rapport qualité-débit. Ce choix concerne "
             "les fichiers téléchargés ; la qualité de lecture se règle "
-            "ensuite dans les réglages.",
+            "ensuite dans les réglages."),
             "triat-body", "triat-dim", wrap=True, max_width_chars=52))
 
         group = Adw.PreferencesGroup()
-        combo = Adw.ComboRow(title="Format téléchargé")
+        combo = Adw.ComboRow(title=_("Format téléchargé"))
         model = Gtk.StringList()
         values = list(FORMATS)
         for name in values:
@@ -273,6 +275,15 @@ class OnboardingView(Gtk.Box):
             "download_format", values[r.get_selected()]))
         group.add(combo)
         box.append(group)
+
+        more = Adw.ExpanderRow(title=_("Sources supplémentaires"),
+                               subtitle=_("Facultatif"))
+        self._soundcloud = SoundCloudSwitch(self._engine, self)
+        more.add_row(self._soundcloud.row)
+        self._more_sources = more
+        extra = Adw.PreferencesGroup()
+        extra.add(more)
+        box.append(extra)
         return box
 
     # ---- Logique ---------------------------------------------------------
@@ -295,7 +306,7 @@ class OnboardingView(Gtk.Box):
         profile = self._profiles.get(name)       # None : emplacement natif
         button.set_sensitive(False)
         self._account_status.set_text(
-            f"Lecture du profil {browser_label(name)}…")
+            _("Lecture du profil {browser_label}…").format(browser_label=browser_label(name)))
 
         def worker() -> None:
             try:
@@ -324,22 +335,22 @@ class OnboardingView(Gtk.Box):
         self._engine.innertube.invalidate()
         if status is not None and status.authenticated:
             self._account_status.set_text(
-                f"Session trouvée : {status.count} cookies. "
-                "Les recommandations sont actives.")
+                _("Session trouvée : {count} cookies. Les recommandations sont actives.").format(count=status.count))
             self._signed_in = True
             self._update_buttons()
         else:
             self._account_status.set_text(
-                "Cookies importés, mais sans session connectée. "
-                "Connectez-vous à YouTube dans le navigateur, puis réessayez.")
+                _("Cookies importés, mais sans session connectée. "
+                "Connecte-toi à YouTube dans le navigateur, puis réessaie."))
         return GLib.SOURCE_REMOVE
 
     def _show_step(self, index: int) -> None:
         self._step = index
         names = ("account", "sponsorblock", "quality")
-        titres = ("compte, facultatif", "SponsorBlock", "qualité")
+        titres = (_("compte, facultatif"), "SponsorBlock", _("qualité"))
         self._stack.set_visible_child_name(names[index])
-        self._step_label.set_text(f"Étape {index + 1} sur {STEPS} : {titres[index]}")
+        self._step_label.set_text(_("Étape {step} sur {total} : {title}").format(
+            step=index + 1, total=STEPS, title=titres[index]))
         for position, dot in enumerate(self._step_dots):
             if position == index:
                 dot.add_css_class("triat-accent-dot")
@@ -358,7 +369,7 @@ class OnboardingView(Gtk.Box):
         self._skip.set_visible(first and not self._signed_in)
         self._next_button.set_visible(not first or self._signed_in)
         self._next_button.set_label(
-            "Commencer" if index == STEPS - 1 else "Suivant")
+            _("Commencer") if index == STEPS - 1 else _("Suivant"))
 
     def _back(self) -> None:
         if self._step > 0:

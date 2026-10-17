@@ -38,8 +38,11 @@ grep -E '^[A-Za-z]' "$reqs" \
     | grep -vE "sys_platform == 'win32'|implementation_name != 'cpython' *\\\\?$|^brotlicffi" \
     | sed -E 's/ *;.*//; s/ *\\$//' > "$filtered"
 
-# Paquets natifs : voir le TODO du manifeste (--prefer-wheels avec le SDK).
+# Wheels de préférence : évite de compiler cryptography (Rust) et cffi en sdist.
+# --prefer-wheels prend une liste de paquets séparés par des virgules
+# (surcharge possible : PREFER_WHEELS=a,b ./gen-requirements.sh) et exige --runtime.
 flatpak-pip-generator --runtime "$SDK" \
+    --prefer-wheels="${PREFER_WHEELS:-cryptography,cffi,brotli,pycryptodomex,zeroconf}" \
     --requirements-file "$filtered" \
     --output "$HERE/python3-requirements"
 echo "écrit : $HERE/python3-requirements.json"

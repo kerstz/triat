@@ -22,29 +22,30 @@ from gi.repository import Adw, Gio, GLib, Gtk
 from ..core.importer import (ImportError_,
                              export_playlist, import_playlist)
 from ..core.smart import DAY, smart_playlists
+from .stats_page import StatsPage
 from .track_list import TrackList
 from .widgets.cards import ArtistCard, seed_for
-from .widgets.common import EmptyState, SectionTitle, label, plural
+from .widgets.common import EmptyState, SectionTitle, label
 from .widgets.glyph import GlyphArt
+from ..i18n import _, nformat
 
 log = logging.getLogger(__name__)
 
-TABS = (("playlists", "Playlists"), ("artists", "Artistes"),
-        ("favorites", "Favoris"), ("history", "Historique"))
+TABS = (("playlists", _("Playlists")), ("artists", _("Artistes")),
+        ("favorites", _("Favoris")), ("history", _("Historique")),
+        ("stats", _("Stats")))
 
 
 # Plafond des listes : le même que celui de `smart_playlists`.
 SMART_LIMIT = 500
 
-_plural = plural
-
-
 def _total(seconds: float) -> str:
     """Durée d'une playlist : « 3 h 12 », « 47 min »."""
     minutes = int(seconds // 60)
     if minutes >= 60:
-        return f"{minutes // 60} h {minutes % 60:02d}"
-    return f"{minutes} min"
+        return _("{hours} h {minutes:02d}").format(hours=minutes // 60,
+                                                   minutes=minutes % 60)
+    return _("{minutes} min").format(minutes=minutes)
 
 
 def _known_total(refs) -> float:
@@ -94,11 +95,11 @@ class SmartTile(Gtk.Button):
         box.append(label(smart.rule, "tile-detail", ellipsize=3))
         self.set_child(box)
         self.update_property([Gtk.AccessibleProperty.LABEL],
-                             [f"{smart.name}, {smart.rule}"])
+                             [_("{name}, {rule}").format(name=smart.name, rule=smart.rule)])
 
     def set_count(self, count: int) -> None:
         self.count.set_text(str(count))
-        self.set_tooltip_text(_plural(count, "titre"))
+        self.set_tooltip_text(nformat("{n} titre", "{n} titres", count))
 
 
 class PlaylistRow(Gtk.ListBoxRow):
@@ -122,9 +123,11 @@ class PlaylistRow(Gtk.ListBoxRow):
         texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1,
                         valign=Gtk.Align.CENTER, hexpand=True)
         texts.append(label(item["name"], "triat-body", ellipsize=3))
-        detail = _plural(count, "titre")
         if item.get("remote_id"):
-            detail += ", synchronisée avec YouTube"
+            detail = nformat("{n} titre, synchronisée avec YouTube",
+                             "{n} titres, synchronisée avec YouTube", count)
+        else:
+            detail = nformat("{n} titre", "{n} titres", count)
         texts.append(label(detail, "triat-dim"))
         box.append(texts)
 
@@ -137,9 +140,9 @@ class PlaylistRow(Gtk.ListBoxRow):
         play.add_css_class("flat")
         play.add_css_class("circular")
         play.set_valign(Gtk.Align.CENTER)
-        play.set_tooltip_text(f"Lire « {item['name']} »")
+        play.set_tooltip_text(_("Lire « {name} »").format(name=item["name"]))
         play.update_property([Gtk.AccessibleProperty.LABEL],
-                             [f"Lire {item['name']}"])
+                             [_("Lire {name}").format(name=item["name"])])
         play.connect("clicked", lambda *_: on_play(item["id"]))
         box.append(play)
         self.set_child(box)
@@ -165,13 +168,13 @@ class LibraryPage(Gtk.Box):
 
         # --- En-tête : titre, puces, actions ---
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        title = label("Bibliothèque", "triat-display", "lg", hexpand=True)
+        title = label(_("Bibliothèque"), "triat-display", "lg", hexpand=True)
         header.append(title)
-        self.import_button = _pill("Importer")
-        self.import_button.set_tooltip_text("Fichier .txt d'URL YouTube, .m3u ou .m3u8")
+        self.import_button = _pill(_("Importer"))
+        self.import_button.set_tooltip_text(_("Fichier .txt d'URL YouTube, .m3u ou .m3u8"))
         self.import_button.connect("clicked", self._choose_file)
         header.append(self.import_button)
-        self.new_button = _pill("Nouvelle playlist", primary=True)
+        self.new_button = _pill(_("Nouvelle playlist"), primary=True)
         self.new_button.connect("clicked", self._ask_new_playlist)
         header.append(self.new_button)
         column.append(header)
@@ -210,7 +213,7 @@ class LibraryPage(Gtk.Box):
 
         # --- Vue d'ensemble des playlists ---
         overview = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
-        overview.append(SectionTitle("Listes intelligentes"))
+        overview.append(SectionTitle(_("Listes intelligentes")))
         # FlowBox : quatre tuiles sur une ligne quand il y a la place, deux
         # sinon. Une Box homogène imposait 580 px de large à la fenêtre.
         self.smart_row = Gtk.FlowBox(homogeneous=True, column_spacing=10,
@@ -226,7 +229,7 @@ class LibraryPage(Gtk.Box):
             tile.connect("clicked", self._open_smart)
             self.smart_row.append(tile)
 
-        mine = SectionTitle("Vos playlists")
+        mine = SectionTitle(_("Tes playlists"))
         mine.set_margin_top(14)
         overview.append(mine)
         self.playlists = Gtk.ListBox()
@@ -235,9 +238,9 @@ class LibraryPage(Gtk.Box):
         self.playlists.connect("row-activated", self._on_playlist_row)
         overview.append(self.playlists)
         self.playlists_empty = EmptyState(
-            "Aucune playlist",
-            "Importez un fichier .txt d'URL YouTube ou .m3u, "
-            "ou créez une playlist vide.")
+            _("Aucune playlist"),
+            _("Importe un fichier .txt d'URL YouTube ou .m3u, "
+            "ou crée une playlist vide."))
         overview.append(self.playlists_empty)
         self.views.add_named(self._scrolled(overview), "playlists")
 
@@ -248,8 +251,8 @@ class LibraryPage(Gtk.Box):
         back.add_css_class("flat")
         back.add_css_class("circular")
         back.set_valign(Gtk.Align.CENTER)
-        back.set_tooltip_text("Retour aux playlists")
-        back.update_property([Gtk.AccessibleProperty.LABEL], ["Retour"])
+        back.set_tooltip_text(_("Retour aux playlists"))
+        back.update_property([Gtk.AccessibleProperty.LABEL], [_("Retour")])
         back.connect("clicked", lambda *_: self.close_detail())
         heading.append(back)
         self.detail_title = label("", "triat-display", "sm", ellipsize=3,
@@ -266,21 +269,21 @@ class LibraryPage(Gtk.Box):
         actions.set_margin_start(42)
         actions.set_margin_top(8)
         actions.set_margin_bottom(8)
-        self.play_all = _pill("Tout lire", primary=True)
+        self.play_all = _pill(_("Tout lire"), primary=True)
         self.play_all.connect("clicked", lambda *_: self._play_detail(False))
         actions.append(self.play_all)
-        self.shuffle = _pill("Aléatoire")
+        self.shuffle = _pill(_("Aléatoire"))
         self.shuffle.connect("clicked", lambda *_: self._play_detail(True))
         actions.append(self.shuffle)
-        self.export_button = _quiet("Exporter")
+        self.export_button = _quiet(_("Exporter"))
         self.export_button.set_tooltip_text(
-            "Enregistrer en .m3u8, .txt, .json ou .csv")
+            _("Enregistrer en .m3u8, .txt, .json ou .csv"))
         self.export_button.connect("clicked", self._choose_export)
         actions.append(self.export_button)
-        self.rename_button = _quiet("Renommer")
+        self.rename_button = _quiet(_("Renommer"))
         self.rename_button.connect("clicked", self._ask_rename)
         actions.append(self.rename_button)
-        self.delete_button = _quiet("Supprimer")
+        self.delete_button = _quiet(_("Supprimer"))
         self.delete_button.add_css_class("destructive-action")
         self.delete_button.connect("clicked", self._ask_delete)
         actions.append(self.delete_button)
@@ -298,9 +301,9 @@ class LibraryPage(Gtk.Box):
         self.artists.set_valign(Gtk.Align.START)
         artists_view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.artists_empty = EmptyState(
-            "Aucun artiste",
-            "Les artistes de vos playlists, favoris et écoutes "
-            "apparaîtront ici.")
+            _("Aucun artiste"),
+            _("Les artistes de tes playlists, favoris et écoutes "
+            "apparaîtront ici."))
         artists_view.append(self.artists_empty)
         artists_view.append(self._scrolled(self.artists))
         self.views.add_named(artists_view, "artists")
@@ -314,6 +317,10 @@ class LibraryPage(Gtk.Box):
         plain_view.append(self.plain_empty)
         plain_view.append(self._scrolled(self.plain))
         self.views.add_named(plain_view, "tracks")
+
+        # --- Stats ---
+        self.stats = StatsPage(engine)
+        self.views.add_named(self._scrolled(self.stats), "stats")
 
         engine.connect("library-changed", lambda *_: self._on_library_changed())
         self.refresh()
@@ -352,25 +359,33 @@ class LibraryPage(Gtk.Box):
         elif key == "artists":
             self._load_artists()
             self.views.set_visible_child_name("artists")
+        elif key == "stats":
+            self.status.set_text("")
+            self.stats.refresh()
+            self.views.set_visible_child_name("stats")
         else:
             refs = (self._engine.library.list_favorites(limit=500)
                     if key == "favorites"
                     else self._engine.library.recent(limit=500))
             self.plain.set_tracks(refs)
-            noun = "favori" if key == "favorites" else "écoute"
-            self.status.set_text(_plural(len(refs), noun) if refs else "")
+            if not refs:
+                self.status.set_text("")
+            elif key == "favorites":
+                self.status.set_text(nformat("{n} favori", "{n} favoris", len(refs)))
+            else:
+                self.status.set_text(nformat("{n} écoute", "{n} écoutes", len(refs)))
             self.plain_empty.set_visible(not refs)
             self.plain.set_visible(bool(refs))
             if not refs:
                 if key == "favorites":
                     self.plain_empty.set_message(
-                        "Aucun favori",
-                        "Appuyez sur le cœur d'un titre pour le retrouver ici.")
+                        _("Aucun favori"),
+                        _("Appuie sur le cœur d'un titre pour le retrouver ici."))
                 else:
                     self.plain_empty.set_message(
-                        "Aucune écoute",
-                        "Les titres que vous écoutez apparaîtront ici, "
-                        "sauf en session privée.")
+                        _("Aucune écoute"),
+                        _("Les titres que tu écoutes apparaîtront ici, "
+                        "sauf en session privée."))
             self.views.set_visible_child_name("tracks")
         self._mark_current()
 
@@ -382,7 +397,9 @@ class LibraryPage(Gtk.Box):
         self.playlists_empty.set_visible(not items)
         total = sum(item["item_count"] for item in items)
         self.status.set_text(
-            f"{_plural(len(items), 'playlist')}, {_plural(total, 'piste')}"
+            _("{playlists}, {tracks}").format(
+                playlists=nformat("{n} playlist", "{n} playlists", len(items)),
+                tracks=nformat("{n} piste", "{n} pistes", total))
             if items else "")
         for tile in self.smart_tiles:
             tile.set_count(self._smart_count(tile.smart))
@@ -412,7 +429,7 @@ class LibraryPage(Gtk.Box):
     def _load_artists(self) -> None:
         self.artists.remove_all()
         artists = self._engine.library.artists(limit=200, owned=True)
-        self.status.set_text(_plural(len(artists), "artiste") if artists
+        self.status.set_text(nformat("{n} artiste", "{n} artistes", len(artists)) if artists
                              else "")
         self.artists_empty.set_visible(not artists)
         self.artists.set_visible(bool(artists))
@@ -452,15 +469,15 @@ class LibraryPage(Gtk.Box):
                 return
             name = item["name"]
             refs = library.playlist_items(self._detail_id)
-            origin = ("synchronisée avec YouTube" if item.get("remote_id")
-                      else "playlist locale")
+            origin = (_("synchronisée avec YouTube") if item.get("remote_id")
+                      else _("playlist locale"))
         else:
             name = self._detail_smart.name
             refs = self._detail_smart.fetch()
             origin = self._detail_smart.rule
         self._detail_refs = refs
         self.detail_title.set_text(name)
-        meta = [_plural(len(refs), "titre"), origin]
+        meta = [nformat("{n} titre", "{n} titres", len(refs)), origin]
         seconds = _known_total(refs)
         if seconds:
             meta.insert(1, _total(seconds))
@@ -520,7 +537,7 @@ class LibraryPage(Gtk.Box):
         dialog = Adw.AlertDialog(heading=heading)
         entry = Gtk.Entry(text=initial, activates_default=True)
         dialog.set_extra_child(entry)
-        dialog.add_response("cancel", "Annuler")
+        dialog.add_response("cancel", _("Annuler"))
         dialog.add_response("ok", confirm)
         dialog.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
         dialog.set_default_response("ok")
@@ -540,7 +557,7 @@ class LibraryPage(Gtk.Box):
             self.show_playlist(playlist_id)
             self._notify_sidebar()
 
-        self._name_dialog("Nouvelle playlist", "", "Créer", create)
+        self._name_dialog(_("Nouvelle playlist"), "", _("Créer"), create)
 
     def _ask_rename(self, _button) -> None:
         if self._detail_id is None:
@@ -552,8 +569,8 @@ class LibraryPage(Gtk.Box):
             self._reload_detail()
             self._notify_sidebar()
 
-        self._name_dialog("Renommer la playlist",
-                          self.detail_title.get_text(), "Renommer", rename)
+        self._name_dialog(_("Renommer la playlist"),
+                          self.detail_title.get_text(), _("Renommer"), rename)
 
     def _ask_delete(self, _button) -> None:
         if self._detail_id is None:
@@ -561,10 +578,10 @@ class LibraryPage(Gtk.Box):
         playlist_id = self._detail_id
         name = self.detail_title.get_text()
         dialog = Adw.AlertDialog(
-            heading=f"Supprimer « {name} » ?",
-            body="La playlist disparaît ; les pistes restent dans la bibliothèque.")
-        dialog.add_response("cancel", "Annuler")
-        dialog.add_response("delete", "Supprimer")
+            heading=_("Supprimer « {name} » ?").format(name=name),
+            body=_("La playlist disparaît ; les pistes restent dans la bibliothèque."))
+        dialog.add_response("cancel", _("Annuler"))
+        dialog.add_response("delete", _("Supprimer"))
         dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
         dialog.set_close_response("cancel")
 
@@ -574,7 +591,7 @@ class LibraryPage(Gtk.Box):
                 self.close_detail()
                 self._notify_sidebar()
                 if self._toaster:
-                    self._toaster(f"« {name} » supprimée")
+                    self._toaster(_("« {name} » supprimée").format(name=name))
 
         dialog.connect("response", on_response)
         dialog.present(self.get_root())
@@ -589,9 +606,9 @@ class LibraryPage(Gtk.Box):
     def _choose_export(self, _button) -> None:
         if not self._detail_refs:
             if self._toaster:
-                self._toaster("Rien à exporter")
+                self._toaster(_("Rien à exporter"))
             return
-        dialog = Gtk.FileDialog(title="Exporter la playlist")
+        dialog = Gtk.FileDialog(title=_("Exporter la playlist"))
         base = self.detail_title.get_text() or "playlist"
         dialog.set_initial_name(f"{base}.m3u8")
         dialog.save(self.get_root(), None, self._on_export_chosen)
@@ -608,24 +625,25 @@ class LibraryPage(Gtk.Box):
             path = export_playlist(refs, file.get_path())
         except Exception as exc:
             if self._toaster:
-                self._toaster(f"Export impossible : {exc}")
+                self._toaster(_("Export impossible : {exc}").format(exc=exc))
             return
         if self._toaster:
-            s = "s" if len(refs) > 1 else ""
-            self._toaster(f"{len(refs)} piste{s} exportée{s} vers {path.name}")
+            self._toaster(nformat("{n} piste exportée vers {name}",
+                                  "{n} pistes exportées vers {name}",
+                                  len(refs), name=path.name))
 
     # ---- Import ----------------------------------------------------------
 
     def _choose_file(self, _button) -> None:
-        dialog = Gtk.FileDialog(title="Importer une playlist")
+        dialog = Gtk.FileDialog(title=_("Importer une playlist"))
         filters = Gio.ListStore(item_type=Gtk.FileFilter)
         playlist_filter = Gtk.FileFilter()
-        playlist_filter.set_name("Playlists (.txt, .m3u, .m3u8)")
+        playlist_filter.set_name(_("Playlists (.txt, .m3u, .m3u8)"))
         for pattern in ("*.txt", "*.m3u", "*.m3u8"):
             playlist_filter.add_pattern(pattern)
         filters.append(playlist_filter)
         every = Gtk.FileFilter()
-        every.set_name("Tous les fichiers")
+        every.set_name(_("Tous les fichiers"))
         every.add_pattern("*")
         filters.append(every)
         dialog.set_filters(filters)
@@ -643,7 +661,7 @@ class LibraryPage(Gtk.Box):
     def start_import(self, path: str) -> None:
         """Importe en arrière-plan, l'interface reste réactive."""
         self.import_button.set_sensitive(False)
-        self.status.set_text("Import en cours…")
+        self.status.set_text(_("Import en cours…"))
 
         def worker() -> None:
             try:
@@ -662,9 +680,9 @@ class LibraryPage(Gtk.Box):
     def _import_done(self, playlist_id, name, count: int, error) -> bool:
         self.import_button.set_sensitive(True)
         if error:
-            self.status.set_text("Import échoué")
+            self.status.set_text(_("Import échoué"))
             if self._toaster is not None:
-                self._toaster(f"Import impossible : {error}")
+                self._toaster(_("Import impossible : {error}").format(error=error))
             return GLib.SOURCE_REMOVE
         if playlist_id is not None:
             self.show_playlist(playlist_id)
@@ -674,5 +692,7 @@ class LibraryPage(Gtk.Box):
         self._notify_sidebar()
         self._engine.backfill_durations_async()
         if self._toaster is not None:
-            self._toaster(f"« {name} » importée : {_plural(count, 'piste')}")
+            self._toaster(nformat("« {name} » importée : {n} piste",
+                                  "« {name} » importée : {n} pistes",
+                                  count, name=name))
         return GLib.SOURCE_REMOVE

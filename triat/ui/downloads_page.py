@@ -11,14 +11,14 @@ from gi.repository import Adw, GLib, Gtk
 
 from ..core.downloads import CANCELLED, DONE, FAILED, PENDING, RUNNING
 from ..core.paths import downloads_dir
-from .widgets.common import plural
+from ..i18n import _, nformat
 
 STATE_LABELS = {
-    PENDING: "en attente",
-    RUNNING: "en cours",
-    DONE: "terminé",
-    FAILED: "échec",
-    CANCELLED: "annulé",
+    PENDING: _("en attente"),
+    RUNNING: _("en cours"),
+    DONE: _("terminé"),
+    FAILED: _("échec"),
+    CANCELLED: _("annulé"),
 }
 FORMATS = (("opus", "Opus"), ("m4a", "M4A"), ("mp3", "MP3"))
 
@@ -42,18 +42,18 @@ class DownloadsPage(Gtk.Box):
         column.set_margin_bottom(24)
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        title = _label("Hors-ligne", "triat-display", "lg")
+        title = _label(_("Hors-ligne"), "triat-display", "lg")
         title.set_hexpand(True)
         header.append(title)
 
-        self.pause_button = Gtk.Button(label="Tout suspendre",
+        self.pause_button = Gtk.Button(label=_("Tout suspendre"),
                                        valign=Gtk.Align.CENTER)
         self.pause_button.add_css_class("pill")
         self.pause_button.connect("clicked", self._toggle_pause)
         header.append(self.pause_button)
-        self.clear_button = Gtk.Button(label="Vider", valign=Gtk.Align.CENTER)
+        self.clear_button = Gtk.Button(label=_("Vider"), valign=Gtk.Align.CENTER)
         self.clear_button.add_css_class("pill")
-        self.clear_button.set_tooltip_text("Retirer les téléchargements terminés")
+        self.clear_button.set_tooltip_text(_("Retirer les téléchargements terminés"))
         self.clear_button.set_visible(False)
         self.clear_button.connect("clicked", self._clear_finished)
         header.append(self.clear_button)
@@ -62,9 +62,9 @@ class DownloadsPage(Gtk.Box):
         self.summary = _label("", "triat-label", "triat-dim")
         column.append(self.summary)
 
-        options = Adw.PreferencesGroup(title="Options")
-        fmt = Adw.ComboRow(title="Format",
-                           subtitle="Opus offre le meilleur rapport qualité/poids")
+        options = Adw.PreferencesGroup(title=_("Options"))
+        fmt = Adw.ComboRow(title=_("Format"),
+                           subtitle=_("Opus offre le meilleur rapport qualité/poids"))
         model = Gtk.StringList()
         for _value, name in FORMATS:
             model.append(name)
@@ -77,15 +77,15 @@ class DownloadsPage(Gtk.Box):
         options.add(fmt)
 
         cut = Adw.SwitchRow(
-            title="Couper les segments SponsorBlock",
-            subtitle="Le fichier produit ne contient plus les passages non musicaux")
+            title=_("Couper les segments SponsorBlock"),
+            subtitle=_("Le fichier produit ne contient plus les passages non musicaux"))
         cut.set_active(bool(engine.settings.get("download_cut_sponsorblock")))
         cut.connect("notify::active", lambda r, _p: self._set(
             "download_cut_sponsorblock", r.get_active()))
         options.add(cut)
 
         # Un chemin peut contenir « & » : pas de balisage Pango.
-        folder = Adw.ActionRow(title="Dossier", use_markup=False)
+        folder = Adw.ActionRow(title=_("Dossier"), use_markup=False)
         folder.set_subtitle(str(downloads_dir()))
         options.add(folder)
         column.append(options)
@@ -94,7 +94,7 @@ class DownloadsPage(Gtk.Box):
         column.append(self.list_box)
 
         self.empty = _label(
-            "Aucun téléchargement. Clic droit sur une piste pour l'ajouter.",
+            _("Aucun téléchargement. Clic droit sur une piste pour l'ajouter."),
             "triat-body", "triat-dim", wrap=True, max_width_chars=54)
         column.append(self.empty)
 
@@ -128,9 +128,15 @@ class DownloadsPage(Gtk.Box):
         # progression : on regroupe en un rafraîchissement au plus toutes
         # les 250 ms au lieu de reconstruire la page des dizaines de fois
         # par seconde.
+        # Le drapeau n'est lu et modifié que sur le fil principal : on y
+        # repasse toujours par idle_add, jamais depuis ce fil de travail.
+        GLib.idle_add(self._schedule_refresh)
+
+    def _schedule_refresh(self) -> bool:
         if not self._refresh_pending:
             self._refresh_pending = True
             GLib.timeout_add(250, self._deferred_refresh)
+        return GLib.SOURCE_REMOVE
 
     def _deferred_refresh(self) -> bool:
         self._refresh_pending = False
@@ -153,11 +159,13 @@ class DownloadsPage(Gtk.Box):
 
         self.empty.set_visible(not tasks)
         self.pause_button.set_label(
-            "Reprendre" if manager.paused else "Tout suspendre")
+            _("Reprendre") if manager.paused else _("Tout suspendre"))
 
         done = sum(1 for t in tasks if t.state == DONE)
         self.summary.set_text(
-            f"{plural(done, 'terminé')}, {len(tasks) - done} en file"
+            _("{done}, {queued} en file").format(
+                done=nformat("{n} terminé", "{n} terminés", done),
+                queued=len(tasks) - done)
             if tasks else "")
         self.clear_button.set_visible(
             any(t.state in (DONE, FAILED, CANCELLED) for t in tasks))
@@ -187,12 +195,14 @@ class DownloadsPage(Gtk.Box):
     @staticmethod
     def _detail_text(task) -> str:
         state = STATE_LABELS.get(task.state, task.state)
-        detail = f"{task.ref.artist or '—'}, {state}"
+        artist = task.ref.artist or "—"
         if task.state == RUNNING:
-            detail += f", {task.progress * 100:.0f} %"
-        elif task.state == FAILED and task.error:
-            detail += f", {task.error[:40]}"
-        return detail
+            return _("{artist}, {state}, {percent} %").format(
+                artist=artist, state=state, percent=f"{task.progress * 100:.0f}")
+        if task.state == FAILED and task.error:
+            return _("{artist}, {state}, {error}").format(
+                artist=artist, state=state, error=task.error[:40])
+        return _("{artist}, {state}").format(artist=artist, state=state)
 
     def _row(self, task):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -232,11 +242,11 @@ class DownloadsPage(Gtk.Box):
         manager = self._engine.downloads
         if task.state in (PENDING, RUNNING):
             actions.append(self._icon_button(
-                "triat-close-symbolic", "Annuler",
+                "triat-close-symbolic", _("Annuler"),
                 lambda: (manager.cancel(task.ref.video_id), self.refresh())))
         elif task.state == FAILED:
             actions.append(self._icon_button(
-                "triat-play-symbolic", "Réessayer",
+                "triat-play-symbolic", _("Réessayer"),
                 lambda: self._retry(task)))
 
     def _retry(self, task) -> None:

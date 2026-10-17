@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 APP_NAME = "triat"
@@ -56,11 +59,27 @@ def state_dir() -> Path:
     return path
 
 
+_fallback_runtime: Path | None = None
+
+
+def _fallback_runtime_dir() -> Path:
+    """Sans XDG_RUNTIME_DIR : dossier temporaire privé (0700), supprimé à la
+    sortie. Jamais dans ~/.cache, qui survit à la session."""
+    global _fallback_runtime
+    if _fallback_runtime is None or not _fallback_runtime.is_dir():
+        path = Path(tempfile.mkdtemp(prefix=f"{APP_NAME}-run-"))
+        path.chmod(0o700)
+        atexit.register(shutil.rmtree, path, ignore_errors=True)
+        _fallback_runtime = path
+    return _fallback_runtime
+
+
 def runtime_dir() -> Path:
     """Tmpfs en RAM, effacé à la déconnexion. Pour les secrets déchiffrés."""
     raw = os.environ.get("XDG_RUNTIME_DIR")
-    base = Path(raw) if raw else cache_dir()
-    path = base / APP_NAME
+    if not raw:
+        return _fallback_runtime_dir()
+    path = Path(raw) / APP_NAME
     path.mkdir(parents=True, exist_ok=True)
     path.chmod(0o700)
     return path

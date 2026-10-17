@@ -67,6 +67,10 @@ class Queue(GObject.Object):
         """Pistes restantes dans l'ordre de lecture réel."""
         return [self._items[i] for i in self._order[self._pos + 1:]]
 
+    def upcoming_indices(self) -> list[int]:
+        """Indices (dans `items`) des pistes restantes, dans l'ordre de lecture."""
+        return list(self._order[self._pos + 1:])
+
     @property
     def has_next(self) -> bool:
         if not self._items:
@@ -252,7 +256,13 @@ class Queue(GObject.Object):
             "repeat": self._repeat,
         }
 
-    def restore(self, data: dict) -> None:
+    def restore(self, data: dict, silent: bool = False) -> bool:
+        """Recharge un `snapshot()`. Les entrées illisibles sont ignorées.
+
+        Avec `silent`, aucun signal n'est émis : la file est posée sans que
+        la piste courante soit « changée » (donc sans lancer de lecture).
+        Renvoie True si la file n'est pas vide après l'appel.
+        """
         refs = []
         for item in data.get("items") or []:
             if isinstance(item, dict):
@@ -264,7 +274,16 @@ class Queue(GObject.Object):
         repeat = data.get("repeat", REPEAT_OFF)
         self._repeat = repeat if repeat in REPEAT_MODES else REPEAT_OFF
         index = data.get("index", 0)
-        self.set_items(refs, start=index if isinstance(index, int) and index >= 0 else 0)
+        start = index if isinstance(index, int) and index >= 0 else 0
+        if not silent:
+            self.set_items(refs, start=start)
+            return bool(refs)
+        self._items = refs
+        if refs:
+            self._build_order_from(max(0, min(start, len(refs) - 1)))
+        else:
+            self._order, self._pos = [], -1
+        return bool(refs)
 
     # ---- Interne -------------------------------------------------------
 

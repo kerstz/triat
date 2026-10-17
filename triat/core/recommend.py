@@ -139,8 +139,11 @@ class Recommender:
 
         # a. YouTube Music : seulement connecté (muet sinon) et hors session
         # privée (la requête porte le compte).
+        # Les API YouTube ne reçoivent que des identifiants YouTube : une
+        # piste SoundCloud (graine) ne part jamais vers YouTube Music ni
+        # InnerTube, et ne touche donc pas au disjoncteur distant.
         remote_ran = remote_got = False
-        remote_ok = now >= self._remote_down_until
+        remote_ok = ref.source == "youtube" and now >= self._remote_down_until
         if (remote_ok and not private and self._ytmusic is not None
                 and self._ytmusic.authenticated):
             remote_ran = True
@@ -247,7 +250,7 @@ class Recommender:
             anonymous = self._safe(lambda: self._innertube.home())
             if anonymous:
                 self._remember(anonymous)
-                return "innertube", [{"title": "Recommandé pour vous",
+                return "innertube", [{"title": "Recommandé pour toi",
                                       "tracks": anonymous}]
         return "", []
 
@@ -271,5 +274,5 @@ def _reason(source: str, ref: TrackRef) -> str:
     if source == "local-co":
         return f"Écoutés autour de « {ref.title} » · hors ligne"
     if source == "local-top":
-        return "Vos titres du moment · hors ligne"
+        return "Tes titres du moment · hors ligne"
     return ""

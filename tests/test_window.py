@@ -54,6 +54,13 @@ def application():
     return app
 
 
+def _refresh(home) -> None:
+    """Rafraîchit l'accueil (calculé dans un fil) et attend le résultat."""
+    from tests.test_engine import pump
+    home.refresh()
+    assert pump(lambda: not home._building)
+
+
 @pytest.fixture
 def window(application, engine):
     return TriatWindow(application, engine)
@@ -171,7 +178,7 @@ def test_search_results_start_playback(window, engine):
 
 def test_home_resume_offers_search_on_empty_library(window, engine):
     """Bibliothèque vide : l'accueil invite à chercher plutôt qu'à rien."""
-    window.home.refresh()
+    _refresh(window.home)
     assert window.home.resume.primary.get_label() == "Rechercher"
     window.home.resume.primary.emit("clicked")
     assert window.pages.get_visible_child_name() == "search"
@@ -180,7 +187,7 @@ def test_home_resume_offers_search_on_empty_library(window, engine):
 def test_home_resume_shows_last_listened(window, engine):
     ref = TrackRef("r" * 11, "Get Lucky", "Daft Punk", 369.0)
     engine.library.record_play(ref, 120, True)
-    window.home.refresh()
+    _refresh(window.home)
     assert window.home.resume.title.get_text() == "Get Lucky"
     assert window.home.resume.primary.get_label() == "Reprendre"
 
@@ -244,13 +251,11 @@ def test_seek_from_now_playing_reaches_the_player(window, engine):
 
 
 def test_segments_reach_both_progress_bars(window, engine):
-    from triat.core.sponsorblock import SkipPlanner
-
-    engine._planner = SkipPlanner([Segment(0, 20, "music_offtopic", "u")],
-                                  {"music_offtopic": "skip"})
-    engine.emit("track-changed", TrackRef("c" * 11, "T", "A", 200.0))
+    engine.emit("segments-changed", [Segment(0, 20, "music_offtopic", "u")])
     assert window.player_bar.progress.segments == [(0.0, 20.0, 1.0)]
     assert window.now_playing.progress.segments == [(0.0, 20.0, 1.0)]
+    engine.emit("segments-changed", [])
+    assert window.player_bar.progress.segments == []
 
 
 def test_sheet_opens_and_closes(window):
@@ -335,7 +340,8 @@ def test_status_row_reports_no_cookies(engine):
 
     dialog = SettingsDialog(engine)
     dialog._refresh_status()
-    assert "Aucun cookie" in dialog.status_row.get_subtitle()
+    from tests.test_engine import pump
+    assert pump(lambda: "Aucun cookie" in dialog.status_row.get_subtitle())
 
 
 def test_every_sponsorblock_category_has_a_label():
@@ -521,8 +527,10 @@ def test_home_offers_generated_mixes(window, engine):
     refs = [TrackRef(f"id{i:04d}", f"T{i}", f"A{i % 3}", 180.0) for i in range(30)]
     engine.library.upsert_many(refs)
     engine.library.add_to_playlist(engine.library.create_playlist("Ma musique"), refs)
-    window.home.refresh()
-    assert window.home.mixes and window.home.mixes[0].title == "Mix du jour"
+    _refresh(window.home)
+    from tests.test_engine import pump
+    assert pump(lambda: window.home.mixes)
+    assert window.home.mixes[0].title == "Mix du jour"
     card = window.home.mix_box.get_child_at_index(0).get_child()
     card.emit("clicked")
     from tests.test_engine import pump
@@ -591,7 +599,7 @@ def test_player_bar_fullscreen_starts_something(window, engine):
     refs = [TrackRef(f"id{i:04d}", f"T{i}", "A", 180.0) for i in range(20)]
     engine.library.upsert_many(refs)
     engine.library.add_to_playlist(engine.library.create_playlist("Ma musique"), refs)
-    window.home.refresh()
+    _refresh(window.home)
     window.immersion._spectrum = _FakeSpectrum()
     window.player_bar.fullscreen_button.emit("clicked")
     assert window.immersion.active
@@ -761,7 +769,7 @@ def test_sync_page_builds_and_starts_off(window, engine):
     assert titles.index("Synchronisation") == titles.index("Système") - 1
     assert not dialog.sync_switch.get_active()
     assert not dialog.pair_button.get_sensitive()       # rien à associer
-    assert "Activez" in dialog.sync_address.get_subtitle()
+    assert "Active" in dialog.sync_address.get_subtitle()
     assert not engine.sync.running
     assert dialog._device_rows[0].get_title() == "Aucun téléphone associé"
 
@@ -1015,10 +1023,12 @@ def test_history_cleared_refreshes_home(window, monkeypatch):
     assert len(calls) == 2
 
 
-def test_home_uses_vous(window):
+def test_home_uses_tutoiement(window):
     assert window.home.mixes_section is not None
-    for text in ("tu ", " ton ", "Tes "):
-        assert text not in window.home.resume.radio.get_tooltip_text()
+    tooltip = window.home.resume.radio.get_tooltip_text()
+    assert "tu écoutes" in tooltip
+    for text in ("vous", "Vous", "votre", "Votre"):
+        assert text not in tooltip
 
 
 def test_space_activates_a_keyboard_focused_button(window, engine, monkeypatch):
@@ -1057,7 +1067,7 @@ def test_home_renders_cached_mixes_without_rebuilding(window, engine, monkeypatc
         raise AssertionError("reconstruit alors que le cache est valide")
 
     monkeypatch.setattr(mixes_module, "build_mixes", boom)
-    window.home.refresh()
+    _refresh(window.home)
     assert [m.title for m in window.home.mixes] == ["Mix du jour"]
     assert window.home.mix_box.get_child_at_index(0) is not None
     assert window.home.mix_box.get_child_at_index(1) is None
@@ -1068,8 +1078,6 @@ def test_home_builds_large_libraries_off_the_main_thread(window, engine, monkeyp
     from tests.test_engine import pump
     _library_with_playlist(engine, 40)
     monkeypatch.setattr(mixes_module, "SYNC_BUILD_LIMIT", 0)
-    import triat.ui.window as window_module
-    monkeypatch.setattr(window_module, "SYNC_BUILD_LIMIT", 0)
     window.home.refresh()
     assert window.home._building         # lancé, pas encore rendu
     assert pump(lambda: window.home.mixes)
@@ -1084,7 +1092,7 @@ def test_home_playlists_use_single_query(window, engine, monkeypatch):
         raise AssertionError("une requête par playlist")
 
     monkeypatch.setattr(engine.library, "playlist_items", boom)
-    window.home.refresh()
+    _refresh(window.home)
     assert len(window.home.mixes_grid) == 1
     assert window.home.mixes_grid.items[0].title == "Ma musique"
 
@@ -1107,22 +1115,22 @@ class _StubFeed:
 def test_home_shows_remote_section_from_cache(window, engine):
     from triat.core.home_feed import HomeSnapshot
     tracks = [TrackRef(f"r{i}", f"Reco {i}", "Quelqu'un") for i in range(4)]
-    snap = HomeSnapshot("innertube", [{"title": "Recommandé pour vous",
+    snap = HomeSnapshot("innertube", [{"title": "Recommandé pour toi",
                                        "tracks": tracks}], 1.0, stale=False)
     home = window.home
     home._feed = _StubFeed(snap)
-    home.refresh()
+    _refresh(home)
     assert home.remote_grid.get_visible() and len(home.remote_grid) == 4
     assert "sans compte" in home.remote_note.get_text()
     snap.stale = True
-    home.refresh()
+    _refresh(home)
     assert "hors ligne" in home.remote_note.get_text()
     # Ce qui est écarté disparaît du cache affiché.
     engine.library.block("track", "r0", "Reco 0")
-    home.refresh()
+    _refresh(home)
     assert len(home.remote_grid) == 3
     home._feed = _StubFeed(None)
-    home.refresh()
+    _refresh(home)
     assert not home.remote_grid.get_visible()
 
 
@@ -1130,11 +1138,11 @@ def test_track_menu_block_action(window, engine):
     refs = [TrackRef(f"v{i:04d}", f"T{i}", "Vialice" if i < 10 else f"A{i}", 180.0)
             for i in range(30)]
     engine.library.add_to_playlist(engine.library.create_playlist("P"), refs)
-    window.home.refresh()
+    _refresh(window.home)
     assert any(r.artist == "Vialice" for m in window.home.mixes for r in m.refs)
     window.actions.apply_block(refs[0], "artist")
     assert "vialice" in engine.library.blocked()["artist"]
-    window.home.refresh()
+    _refresh(window.home)
     assert not any(r.artist == "Vialice" for m in window.home.mixes for r in m.refs)
     window.actions.apply_block(refs[15], "track")
     assert refs[15].video_id in engine.library.blocked()["track"]
@@ -1156,3 +1164,58 @@ def test_cookie_change_clears_home_cache(window, engine):
                                                   "sections": []})
     window._on_setting_changed("cookie_source", "chrome")
     assert engine.library.reco_cache_get("home:remote") is None
+
+
+# ---- Accueil : fil d'arrière-plan, doublons, effacement --------------------
+
+def test_recent_listening_is_deduplicated():
+    from triat.ui.window import dedupe_recent
+    refs = [TrackRef("a" * 11, "Get Lucky", "Daft Punk", 369.0),
+            TrackRef("b" * 11, "Get Lucky (Official Video)", "Daft Punk", 369.0),
+            TrackRef("c" * 11, "Other", "Someone", 200.0)]
+    assert [r.video_id for r in dedupe_recent(refs)] == ["a" * 11, "c" * 11]
+    assert len(dedupe_recent(refs, limit=1)) == 1
+
+
+def test_home_refresh_fills_recent_off_the_gtk_thread(window, engine):
+    from tests.test_engine import pump
+    for vid, title in (("a" * 11, "Get Lucky"),
+                       ("b" * 11, "Get Lucky (Official Video)")):
+        engine.library.record_play(TrackRef(vid, title, "Daft Punk", 369.0), 120, True)
+    _refresh(window.home)
+    assert pump(lambda: len(window.home.recent_grid.items) > 0)
+    assert len(window.home.recent_grid.items) == 1
+
+
+def test_stale_home_refresh_is_ignored(window, engine):
+    home = window.home
+    from tests.test_engine import pump
+    pump(lambda: not home._building)
+    home._refresh_seq += 5
+    before = list(home.recent_grid.items)
+    called = []
+    home.refresh = lambda: called.append(1)
+    home._building = True
+    home._refresh_done(home._refresh_seq - 1,
+                       {"recent": [TrackRef("z" * 11, "X", "Y")],
+                        "covers": [], "mixes": None})
+    assert called and home.recent_grid.items == before
+
+
+def test_data_wiped_resets_caches_and_refreshes(window, engine):
+    calls = []
+    home = window.home
+    home._feed = type("F", (), {"reset": lambda self: calls.append("feed"),
+                                "cached": lambda self: None,
+                                "needs_refresh": lambda self: False})()
+    home._store.reset = lambda: calls.append("store")
+    home.refresh = lambda: calls.append("refresh")
+    engine.emit("data-wiped")
+    assert calls == ["feed", "store", "refresh"]
+
+
+def test_player_bar_shows_clean_titles(engine):
+    bar = PlayerBar(engine)
+    bar._on_track(engine, TrackRef("d" * 11, "Daft Punk - Get Lucky (Official Video)",
+                                   "Daft Punk - Topic", 369.0))
+    assert bar._title.get_text() == "Get Lucky"

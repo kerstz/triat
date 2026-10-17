@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
 
 import pytest
 
 from triat.core.library import Library
-from triat.core.mixes import MIX_SIZE, build_mixes
+from triat.core.mixes import MIX_SIZE, MixStore, build_mixes
 from triat.core.models import TrackRef
 
 
@@ -267,3 +268,62 @@ def test_mix_reason_is_set(tmp_path):
     assert mixes["daily"].reason and mixes["fresh"].reason
     assert "Vialice" in mixes["artist:vialice"].reason
     lib.close()
+
+
+class _GatedLibrary:
+    """Délègue à la vraie bibliothèque ; `blocked()` attend un signal pour
+    simuler une construction longue, et expose `epoch`."""
+
+    def __init__(self, lib):
+        self._lib = lib
+        self.epoch = 0
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def blocked(self):
+        self.started.set()
+        assert self.release.wait(5)
+        return self._lib.blocked()
+
+    def __getattr__(self, name):
+        return getattr(self._lib, name)
+
+
+def _build_in_thread(store, gated, interfere, day):
+    out = []
+    thread = threading.Thread(target=lambda: out.append(store.get_or_build(day)))
+    thread.start()
+    assert gated.started.wait(5)
+    interfere()
+    gated.release.set()
+    thread.join(5)
+    return out[0]
+
+
+def test_get_or_build_in_flight_during_reset_does_not_write(library):
+    gated = _GatedLibrary(library)
+    store = MixStore(gated)
+    day = dt.date(2026, 9, 23)
+    result = _build_in_thread(store, gated, store.reset, day)
+    assert result == []
+    assert library.reco_cache_get("mixes:" + day.isoformat()) is None
+
+
+def test_get_or_build_in_flight_during_wipe_does_not_write(library):
+    gated = _GatedLibrary(library)
+    store = MixStore(gated)
+    day = dt.date(2026, 9, 23)
+
+    def wipe():
+        gated.epoch += 1
+
+    assert _build_in_thread(store, gated, wipe, day) == []
+    assert library.reco_cache_get("mixes:" + day.isoformat()) is None
+
+
+def test_get_or_build_without_interference_writes(library):
+    gated = _GatedLibrary(library)
+    store = MixStore(gated)
+    day = dt.date(2026, 9, 23)
+    result = _build_in_thread(store, gated, lambda: None, day)
+    assert result and library.reco_cache_get("mixes:" + day.isoformat())

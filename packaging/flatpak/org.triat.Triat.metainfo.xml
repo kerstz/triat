@@ -31,6 +31,14 @@
     </p>
   </description>
 
+  <url type="homepage">https://github.com/kerstz/triat</url>
+  <url type="bugtracker">https://github.com/kerstz/triat/issues</url>
+  <!-- TODO : <screenshots> volontairement absent. AppStream exige des URL
+       d'images publiques réelles ; aucune capture n'est hébergée à ce jour.
+       À ajouter dès qu'elles existent :
+       <screenshots><screenshot type="default"><image>https://...</image>
+       </screenshot></screenshots> -->
+
   <launchable type="desktop-id">org.triat.Triat.desktop</launchable>
   <content_rating type="oars-1.1"/>
 

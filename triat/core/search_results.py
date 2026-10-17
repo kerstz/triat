@@ -12,7 +12,9 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 
+from ..i18n import nformat
 from .models import TrackRef
+from .soundcloud import ScPlaylist, ScTrack, ScUser
 
 # Suffixes des chaînes générées par YouTube (« Artiste - Topic »).
 _CHANNEL_SUFFIXES = (" - topic", " - sujet", "vevo")
@@ -52,10 +54,14 @@ class SearchResults:
     artists: list[tuple[str, int]] = field(default_factory=list)
     playlists: list[dict] = field(default_factory=list)
     best: BestResult | None = None
+    sc_tracks: list[ScTrack] = field(default_factory=list)
+    sc_artists: list[ScUser] = field(default_factory=list)
+    sc_playlists: list[ScPlaylist] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
-        return not (self.tracks or self.artists or self.playlists)
+        return not (self.tracks or self.artists or self.playlists
+                    or self.sc_tracks or self.sc_artists or self.sc_playlists)
 
 
 def _matches(query: str, text: str) -> bool:
@@ -79,18 +85,28 @@ def _artists(query: str, tracks: list[TrackRef], limit: int) -> list[tuple[str, 
     return [(names[k], counts[k]) for k in ranked[:limit]]
 
 
-def _best(query: str, tracks, artists, playlists) -> BestResult | None:
+def _best(query: str, tracks, artists, playlists,
+          sc_artists=(), source: str = "youtube") -> BestResult | None:
     wanted = normalize(query)
+    # Un artiste SoundCloud ne devient meilleur résultat que si la source
+    # active est SoundCloud ; le comportement par défaut reste inchangé.
+    if source == "soundcloud":
+        for user in sc_artists:
+            key = normalize(user.username)
+            if key == wanted or (key.startswith(wanted) and len(wanted) >= 3):
+                count = user.track_count
+                detail = nformat("{n} titre", "{n} titres", count)
+                return BestResult("artist", user.username, detail)
     for name, count in artists:
         key = normalize(name)
         if key == wanted or (key.startswith(wanted) and len(wanted) >= 3):
-            detail = f"{count} titre" + ("s" if count > 1 else "")
+            detail = nformat("{n} titre", "{n} titres", count)
             return BestResult("artist", name, detail)
     for playlist in playlists:
         if normalize(playlist.get("name", "")) == wanted:
             count = playlist.get("item_count", 0)
             return BestResult("playlist", playlist["name"],
-                              f"Playlist · {count} titres",
+                              nformat("Playlist · {n} titre", "Playlist · {n} titres", count),
                               playlist_id=playlist.get("id"))
     if tracks:
         ref = tracks[0]
@@ -99,8 +115,16 @@ def _best(query: str, tracks, artists, playlists) -> BestResult | None:
 
 
 def build(query: str, remote: list[TrackRef], local: list[TrackRef] = (),
-          playlists: list[dict] = (), artist_limit: int = 8) -> SearchResults:
-    """Assemble les résultats : pistes distantes puis locales, sans doublon."""
+          playlists: list[dict] = (), artist_limit: int = 8, *,
+          sc_tracks=(), sc_artists=(), sc_playlists=(),
+          source: str = "youtube", hide_unplayable: bool = False
+          ) -> SearchResults:
+    """Assemble les résultats : pistes distantes puis locales, sans doublon.
+
+    Les listes SoundCloud sont facultatives. `hide_unplayable` retire les
+    pistes SoundCloud non lisibles ; `source="soundcloud"` autorise un
+    artiste SoundCloud comme meilleur résultat.
+    """
     seen: set[str] = set()
     tracks: list[TrackRef] = []
     for ref in [*remote, *local]:
@@ -110,9 +134,14 @@ def build(query: str, remote: list[TrackRef], local: list[TrackRef] = (),
         tracks.append(ref)
     matched = [p for p in playlists if _matches(query, p.get("name", ""))]
     artists = _artists(query, tracks, artist_limit)
+    sc_tracks = [t for t in sc_tracks if t.playable or not hide_unplayable]
+    sc_artists = list(sc_artists)
     return SearchResults(query=query, tracks=tracks, artists=artists,
                          playlists=matched,
-                         best=_best(query, tracks, artists, matched))
+                         best=_best(query, tracks, artists, matched,
+                                    sc_artists, source),
+                         sc_tracks=sc_tracks, sc_artists=sc_artists,
+                         sc_playlists=list(sc_playlists))
 
 
 HISTORY_SIZE = 8

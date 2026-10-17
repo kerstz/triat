@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -150,6 +151,23 @@ def focus_under_hyprland(app_id: str) -> bool:
         if result.stdout.strip() == "ok":
             return True
     return False
+
+
+def focus_under_hyprland_async(app_id: str, done=None) -> threading.Thread | None:
+    """Comme `focus_under_hyprland`, hors du fil GTK (hyprctl peut bloquer
+    jusqu'à 2 s par essai). `done(bool)` est appelé depuis le fil de travail.
+    Renvoie le fil, ou None si rien n'est à faire (hors Hyprland)."""
+    if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return None
+
+    def work() -> None:
+        ok = focus_under_hyprland(app_id)
+        if done is not None:
+            done(ok)
+
+    thread = threading.Thread(target=work, name="hyprctl-focus", daemon=True)
+    thread.start()
+    return thread
 
 
 # ---- Navigateurs (import des cookies) ----------------------------------------

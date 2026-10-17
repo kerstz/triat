@@ -24,6 +24,7 @@ from .widgets.dot_volume import DotVolume
 from .widgets.glyph import GlyphArt
 from .track_list import format_time as _format_time
 from .widgets.video_area import VideoArea
+from ..i18n import _
 
 log = logging.getLogger(__name__)
 
@@ -36,9 +37,9 @@ GLYPH_GRID = 48
 HINT_MS = 2200
 
 VIDEO_MESSAGES = {
-    "loading": "Chargement du clip…",
-    "unavailable": "Clip indisponible — la musique continue",
-    "no-gl": "Rendu vidéo impossible sur cet affichage",
+    "loading": _("Chargement du clip…"),
+    "unavailable": _("Clip indisponible — la musique continue"),
+    "no-gl": _("Rendu vidéo impossible sur cet affichage"),
 }
 
 
@@ -69,6 +70,7 @@ class ImmersionView(Gtk.Overlay):
         self._last_pointer: tuple[float, float] | None = None
         self._lyrics = None
         self._lyrics_token = 0
+        self._was_soundcloud = False
         self._lyric_index = -2
         self._handlers: list[int] = []
         self._mode = engine.settings.get("immersion_mode") or "clip"
@@ -133,7 +135,7 @@ class ImmersionView(Gtk.Overlay):
         self.add_overlay(self._build_subtitles())
         self.add_overlay(self._build_bottom())
 
-        self.hint = _label("Bouger la souris pour les contrôles",
+        self.hint = _label(_("Bouger la souris pour les contrôles"),
                            "triat-mono", "triat-immersion-hint",
                            valign=Gtk.Align.END, halign=Gtk.Align.CENTER,
                            margin_bottom=28)
@@ -154,7 +156,7 @@ class ImmersionView(Gtk.Overlay):
         dot = Gtk.Box(valign=Gtk.Align.CENTER)
         dot.add_css_class("triat-accent-dot")
         badge.append(dot)
-        badge.append(_label("Plein écran", "triat-label"))
+        badge.append(_label(_("Plein écran"), "triat-label"))
         left.append(badge)
         self.title = _label("", "triat-display", "immersion-title",
                             xalign=0, ellipsize=3, max_width_chars=48)
@@ -167,7 +169,7 @@ class ImmersionView(Gtk.Overlay):
         self.format_pill = _label("", "triat-mono", "triat-pill")
         self.format_pill.set_visible(False)
         right.append(self.format_pill)
-        quit_button = Gtk.Button(label="Quitter (Échap)")
+        quit_button = Gtk.Button(label=_("Quitter (Échap)"))
         quit_button.add_css_class("triat-pill-button")
         quit_button.connect("clicked", lambda *_: self._on_close())
         right.append(quit_button)
@@ -215,15 +217,15 @@ class ImmersionView(Gtk.Overlay):
 
         controls = Gtk.CenterBox()
         chips = Gtk.Box(spacing=8, valign=Gtk.Align.CENTER)
-        self.clip_chip = Gtk.ToggleButton(label="Clip")
-        self.glyph_chip = Gtk.ToggleButton(label="Matrice", group=self.clip_chip)
-        self.lyrics_chip = Gtk.ToggleButton(label="Paroles", active=True)
+        self.clip_chip = Gtk.ToggleButton(label=_("Clip"))
+        self.glyph_chip = Gtk.ToggleButton(label=_("Matrice"), group=self.clip_chip)
+        self.lyrics_chip = Gtk.ToggleButton(label=_("Paroles"), active=True)
         for chip in (self.clip_chip, self.glyph_chip, self.lyrics_chip):
             chip.add_css_class("triat-chip")
             chips.append(chip)
-        self.clip_chip.set_tooltip_text("Le clip officiel (V pour basculer)")
+        self.clip_chip.set_tooltip_text(_("Le clip officiel (V pour basculer)"))
         self.glyph_chip.set_tooltip_text(
-            "La pochette en matrice de points, au rythme du son (V)")
+            _("La pochette en matrice de points, au rythme du son (V)"))
         self.clip_chip.connect("toggled", self._on_mode_chip, "clip")
         self.glyph_chip.connect("toggled", self._on_mode_chip, "glyph")
         self.lyrics_chip.connect("toggled", lambda b: self.subtitles.set_visible(
@@ -231,9 +233,9 @@ class ImmersionView(Gtk.Overlay):
         controls.set_start_widget(chips)
 
         centre = Gtk.Box(spacing=14, halign=Gtk.Align.CENTER)
-        self.prev_button = self._icon("triat-previous-symbolic", "Précédent", 44)
-        self.play_button = self._icon("triat-play-symbolic", "Lecture", 56, True)
-        self.next_button = self._icon("triat-next-symbolic", "Suivant", 44)
+        self.prev_button = self._icon("triat-previous-symbolic", _("Précédent"), 44)
+        self.play_button = self._icon("triat-play-symbolic", _("Lecture"), 56, True)
+        self.next_button = self._icon("triat-next-symbolic", _("Suivant"), 44)
         for button in (self.prev_button, self.play_button, self.next_button):
             centre.append(button)
         controls.set_center_widget(centre)
@@ -317,10 +319,12 @@ class ImmersionView(Gtk.Overlay):
         self._area.connect("realize", self._on_area_realized)
         self._area.set_opacity(0.0)
         self.screen.add_overlay(self._area)
-        self._set_message("loading")
+        self._set_message("" if self._is_soundcloud() else "loading")
         # Matrice d'abord : elle est prête tout de suite, le clip la
         # remplace dès qu'il arrive.
-        self._show_scene("glyph" if self._mode == "glyph" else "clip")
+        self._show_scene(
+            "glyph" if self._mode == "glyph" or self._is_soundcloud()
+            else "clip")
         self.set_mode(self._mode, remember=False)
         self._reveal()
         self.grab_focus()
@@ -351,12 +355,25 @@ class ImmersionView(Gtk.Overlay):
             self._set_message("no-gl")
             self._show_scene("glyph")
             return
-        if self._mode == "clip":
+        if self._mode == "clip" and not self._is_soundcloud():
             self._engine.set_video_mode(True)
 
     # ---- Moteur --------------------------------------------------------------
 
+    def _is_soundcloud(self) -> bool:
+        ref = self._engine.current
+        return ref is not None and ref.source == "soundcloud"
+
     def _on_track(self, _engine, ref) -> None:
+        soundcloud = ref is not None and ref.source == "soundcloud"
+        was_soundcloud, self._was_soundcloud = self._was_soundcloud, soundcloud
+        if self._active and self._area is not None:
+            if soundcloud:
+                # Pas de clip pour SoundCloud : la matrice reste seule.
+                self._engine.set_video_mode(False)
+                self._show_scene("glyph")
+            elif was_soundcloud:
+                self.set_mode(self._mode, remember=False)
         self.title.set_text(ref.title if ref else "")
         self.artist.set_text((ref.artist or "") if ref else "")
         self.cover.set_track(ref)
@@ -368,7 +385,7 @@ class ImmersionView(Gtk.Overlay):
         playing = state == "playing"
         self.play_button.set_icon_name(
             "triat-pause-symbolic" if playing else "triat-play-symbolic")
-        self.play_button.set_tooltip_text("Pause" if playing else "Lecture")
+        self.play_button.set_tooltip_text(_("Pause") if playing else _("Lecture"))
 
     def _on_options(self, _engine) -> None:
         """Volume changé ailleurs (barre, lecture en cours, MPRIS)."""
@@ -392,14 +409,15 @@ class ImmersionView(Gtk.Overlay):
             # Pas de clip pour ce titre : la matrice prend le relais, et on
             # retentera le clip au titre suivant.
             self._show_scene("glyph")
-        if state == "ready" and self._mode == "clip":
+        if (state == "ready" and self._mode == "clip"
+                and not self._is_soundcloud()):
             self._show_scene("clip")
         if state == "ready":
             if self._area is not None:
                 self._area.set_opacity(1.0)
             self.placeholder_box.set_visible(False)
             if stream is not None and stream.label:
-                self.format_pill.set_text(f"{stream.label} · Opus")
+                self.format_pill.set_text(_("{label} · Opus").format(label=stream.label))
                 self.format_pill.set_visible(True)
         elif state in VIDEO_MESSAGES:
             self._set_message(state)
@@ -414,7 +432,7 @@ class ImmersionView(Gtk.Overlay):
 
     def _refresh_up_next(self) -> None:
         upcoming = self._engine.queue.upcoming
-        self.up_next.set_text(f"À suivre : {upcoming[0].title}" if upcoming
+        self.up_next.set_text(_("À suivre : {title}").format(title=upcoming[0].title) if upcoming
                               else "")
 
     # ---- Paroles en sous-titres ------------------------------------------------
@@ -425,7 +443,7 @@ class ImmersionView(Gtk.Overlay):
         self._lyrics = None
         self._lyric_index = -2
         self._show_line(None, None)
-        if ref is None:
+        if ref is None or ref.source == "soundcloud":
             return
 
         def worker() -> None:
@@ -588,7 +606,8 @@ class ImmersionView(Gtk.Overlay):
             self._syncing_chips = False
         if not self._active:
             return
-        if mode == "clip" and self._area is not None and self._area.ready:
+        if (mode == "clip" and self._area is not None and self._area.ready
+                and not self._is_soundcloud()):
             self._engine.set_video_mode(True)
             if self._engine.video_state != "ready":
                 # Le clip arrive : on garde la matrice en attendant.

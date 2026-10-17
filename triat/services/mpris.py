@@ -10,6 +10,7 @@ import os
 
 import logging
 import re
+import threading
 
 from gi.repository import Gio, GLib
 
@@ -103,6 +104,9 @@ class MprisService:
         self._node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION)
         # Dernière position vue : un saut de plus d'une seconde est un seek.
         self._last_position: float | None = None
+        # Identifiants des gestionnaires branchés sur le moteur, pour les
+        # débrancher à `unpublish` (sinon ils survivent au service).
+        self._handler_ids: list[int] = []
 
     # ---- Cycle de vie ---------------------------------------------------
 
@@ -146,6 +150,7 @@ class MprisService:
         return True
 
     def unpublish(self) -> None:
+        self._disconnect_engine()
         if self._connection is not None:
             for registration in (self._registration, self._player_registration):
                 if registration:
@@ -157,18 +162,29 @@ class MprisService:
 
     def _connect_engine(self) -> None:
         e = self._engine
-        e.connect("track-changed", lambda *_: self._changed(
-            ["Metadata", "CanGoNext", "CanGoPrevious"]))
-        e.connect("state-changed", lambda *_: self._changed(
-            ["PlaybackStatus", "CanPause", "CanPlay", "CanSeek"]))
-        e.connect("duration-changed", lambda *_: self._changed(["Metadata"]))
-        e.connect("queue-changed", lambda *_: self._changed(
-            ["CanGoNext", "CanGoPrevious"]))
+        self._disconnect_engine()
+        connect = self._handler_ids.append
+        connect(e.connect("track-changed", lambda *_: self._changed(
+            ["Metadata", "CanGoNext", "CanGoPrevious"])))
+        connect(e.connect("state-changed", lambda *_: self._changed(
+            ["PlaybackStatus", "CanPause", "CanPlay", "CanSeek"])))
+        connect(e.connect("duration-changed",
+                          lambda *_: self._changed(["Metadata"])))
+        connect(e.connect("queue-changed", lambda *_: self._changed(
+            ["CanGoNext", "CanGoPrevious"])))
         # Volume, aléatoire et répétition changés depuis l'interface.
-        e.connect("options-changed", lambda *_: self._changed(
-            ["Volume", "Shuffle", "LoopStatus"]))
-        e.connect("position-changed", self._on_position)
-        e.connect("track-changed", self._on_track_reset)
+        connect(e.connect("options-changed", lambda *_: self._changed(
+            ["Volume", "Shuffle", "LoopStatus"])))
+        connect(e.connect("position-changed", self._on_position))
+        connect(e.connect("track-changed", self._on_track_reset))
+
+    def _disconnect_engine(self) -> None:
+        ids, self._handler_ids = self._handler_ids, []
+        for handler_id in ids:
+            try:
+                self._engine.disconnect(handler_id)
+            except Exception as exc:
+                log.debug("Gestionnaire MPRIS déjà débranché : %s", exc)
 
     def _on_track_reset(self, *_args) -> None:
         self._last_position = None
@@ -253,7 +269,9 @@ class MprisService:
                     # appeler OpenUri : on n'accepte que les schémas déclarés
                     # dans SupportedUriSchemes, jamais file:// ni autre.
                     uri = params.unpack()[0]
-                    if is_safe_url(uri):
+                    if self._is_sc_permalink(uri):
+                        self._open_soundcloud(uri)
+                    elif is_safe_url(uri):
                         engine.play_query(uri)
                     else:
                         log.warning("OpenUri refusé : schéma non autorisé")
@@ -261,6 +279,35 @@ class MprisService:
         except Exception as exc:
             log.warning("Appel MPRIS %s.%s échoué: %s", interface, method, exc)
             invocation.return_value(None)
+
+    @staticmethod
+    def _is_sc_permalink(uri) -> bool:
+        from ..core.sources import is_sc_permalink
+        return isinstance(uri, str) and is_sc_permalink(uri.strip())
+
+    def _open_soundcloud(self, uri: str) -> None:
+        """OpenUri d'un permalink SoundCloud : via `extractor.open_uri` si le
+        moteur le fournit, hors du fil principal (appel réseau)."""
+        opener = getattr(self._engine.extractor, "open_uri", None)
+        if opener is None:
+            if is_safe_url(uri):
+                self._engine.play_query(uri)
+            return
+        threading.Thread(target=self._play_soundcloud, args=(opener, uri),
+                         daemon=True).start()
+
+    def _play_soundcloud(self, opener, uri: str) -> None:
+        try:
+            track = opener(uri.strip())
+        except Exception as exc:
+            # SoundCloud désactivé, piste non lisible, lien non-piste : rien ne joue.
+            log.warning("OpenUri SoundCloud refusé : %s", exc)
+            return
+        GLib.idle_add(self._start_ref, track.to_ref())
+
+    def _start_ref(self, ref) -> bool:
+        self._engine.play_refs([ref], start=0)
+        return GLib.SOURCE_REMOVE
 
     def _set_position(self, track_id: str, position: int) -> None:
         """SetPosition : ignoré si la piste n'est plus la courante ou si la
@@ -366,12 +413,13 @@ class MprisService:
         if ref is None:
             return {"mpris:trackid": GLib.Variant("o", track_object_path(""))}
         duration = self._engine.player.duration or ref.duration
+        artist = getattr(ref, "display_artist", ref.artist)
         data = {
             "mpris:trackid": GLib.Variant("o", track_object_path(ref.video_id)),
             "mpris:length": GLib.Variant("x", int(max(0.0, duration) * 1e6)),
-            "xesam:title": GLib.Variant("s", ref.title or ""),
-            "xesam:artist": GLib.Variant("as", [ref.artist] if ref.artist else []),
-            "xesam:url": GLib.Variant("s", ref.url),
+            "xesam:title": GLib.Variant("s", getattr(ref, "display_title", ref.title) or ""),
+            "xesam:artist": GLib.Variant("as", [artist] if artist else []),
+            "xesam:url": GLib.Variant("s", ref.page_url),
         }
         if ref.album:
             data["xesam:album"] = GLib.Variant("s", ref.album)

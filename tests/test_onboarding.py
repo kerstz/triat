@@ -73,3 +73,31 @@ def test_skip_is_only_offered_on_the_account_step(engine):
     assert view._skip.get_visible()
     view._next()
     assert not view._skip.get_visible()
+
+
+def test_soundcloud_off_by_default_in_a_collapsed_row(engine):
+    view = OnboardingView(engine, lambda: None)
+    assert not view._soundcloud.row.get_active()
+    assert not view._more_sources.get_expanded()
+    assert not engine.settings.get("soundcloud_enabled")
+
+
+def test_soundcloud_cancel_writes_nothing(engine):
+    view = OnboardingView(engine, lambda: None)
+    view._soundcloud.row.set_active(True)
+    assert view._soundcloud.alert is not None
+    view._soundcloud.alert.emit("response", "cancel")
+    assert not view._soundcloud.row.get_active()
+    assert not engine.settings.get("soundcloud_enabled")
+    assert not engine.settings.get("soundcloud_tos_ack")
+
+
+def test_soundcloud_enable_then_no_second_box(engine):
+    view = OnboardingView(engine, lambda: None)
+    view._soundcloud.row.set_active(True)
+    view._soundcloud.alert.emit("response", "enable")
+    assert engine.settings.get("soundcloud_tos_ack") is True
+    assert engine.settings.get("soundcloud_enabled") is True
+    view._soundcloud.row.set_active(False)
+    view._soundcloud.row.set_active(True)
+    assert view._soundcloud.alert is None

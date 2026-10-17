@@ -87,3 +87,59 @@ def test_innertube_skips_ads():
         {"itemSectionRenderer": {"contents": [real]}},
     ]}
     assert [r.video_id for r in extract_refs(data)] == ["b" * 11]
+
+
+# ---- SoundCloud -------------------------------------------------------------
+
+from triat.core.soundcloud import ScPlaylist, ScTrack, ScUser  # noqa: E402
+
+
+def sc_track(n: int, playable: bool = True) -> ScTrack:
+    return ScTrack(TrackRef(f"soundcloud:tracks:{n}", f"S{n}", "Zed"),
+                   playable, "" if playable else "snip")
+
+
+def test_sc_lists_default_to_empty():
+    found = sr.build("x", [ref(1)])
+    assert found.sc_tracks == [] and found.sc_artists == []
+    assert found.sc_playlists == []
+
+
+def test_sc_lists_are_carried_and_count_for_empty():
+    users = [ScUser(1, "Zed", track_count=3)]
+    sets = [ScPlaylist(2, "Zed set")]
+    found = sr.build("zed", [], sc_tracks=[sc_track(1)], sc_artists=users,
+                     sc_playlists=sets)
+    assert not found.empty
+    assert found.sc_artists == users and found.sc_playlists == sets
+    assert [t.ref.video_id for t in found.sc_tracks] == ["soundcloud:tracks:1"]
+
+
+def test_sc_only_results_are_not_empty():
+    assert not sr.build("x", [], sc_tracks=[sc_track(1)]).empty
+
+
+def test_sc_artist_is_best_result_only_for_soundcloud_source():
+    users = [ScUser(1, "Zed", track_count=3)]
+    default = sr.build("zed", [ref(1, "Autre", "T")], sc_artists=users)
+    assert default.best.kind == "track"
+    other = sr.build("zed", [ref(1, "Autre", "T")], sc_artists=users,
+                     source="youtube")
+    assert other.best.kind == "track"
+    sc = sr.build("zed", [ref(1, "Autre", "T")], sc_artists=users,
+                  source="soundcloud")
+    assert sc.best.kind == "artist" and sc.best.title == "Zed"
+    assert sc.best.detail == "3 titres"
+
+
+def test_hide_unplayable_removes_only_unplayable_sc_tracks():
+    tracks = [sc_track(1), sc_track(2, playable=False)]
+    shown = sr.build("x", [], sc_tracks=tracks)
+    assert len(shown.sc_tracks) == 2
+    hidden = sr.build("x", [], sc_tracks=tracks, hide_unplayable=True)
+    assert [t.ref.video_id for t in hidden.sc_tracks] == ["soundcloud:tracks:1"]
+
+
+def test_youtube_dedup_is_unchanged_with_sc_lists():
+    found = sr.build("x", [ref(1)], [ref(1)], sc_tracks=[sc_track(1)])
+    assert len(found.tracks) == 1

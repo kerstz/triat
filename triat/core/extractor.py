@@ -191,8 +191,12 @@ class Extractor:
                 check_url(query, allow_hosts=YOUTUBE_HOSTS)
             except UnsafeURL as exc:
                 raise ExtractionError(str(exc)) from exc
-        elif not query.startswith("ytsearch"):
-            # Pas une URL -> recherche YouTube, premier résultat.
+        else:
+            # Pas une URL -> recherche YouTube, premier résultat. Une saisie
+            # qui commence par « ytsearch » n'est jamais transmise telle
+            # quelle (« ytsearch50: » ou « ytsearchall: » : requête de
+            # taille arbitraire) : seul le préfixe `ytsearch1:` posé ici
+            # compte, le reste est du texte de recherche.
             query = f"ytsearch1:{query}"
 
         def convert(info: dict | None) -> Track:

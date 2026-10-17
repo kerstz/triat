@@ -183,3 +183,16 @@ def test_radio_local_top_is_deterministic_per_seed_and_day(lib):
     later = ids(Recommender(lib, clock=lambda: NOW + 3 * DAY).radio_for(SEED, limit=10))
     assert a == b and len(a) == 10
     assert a != other and a != later
+
+
+def test_radio_soundcloud_seed_never_calls_youtube(lib):
+    # Une piste SoundCloud n'est jamais envoyée à YouTube Music ni InnerTube.
+    seed = TrackRef("soundcloud:tracks:5", "Départ SC", "Artiste", 200.0)
+    yt, it = YT(many(5, prefix="yt")), IT(many(5, prefix="yt"))
+    for k, r in enumerate([seed, *many(3, prefix="loc")]):
+        lib.add_history_entry(r, NOW - 5 * DAY + k * 60, 200)
+    reco = make(lib, yt=yt, it=it)
+    result = reco.radio(seed)
+    assert result.refs
+    assert result.source.startswith("local")
+    assert yt.calls == 0 and it.calls == []

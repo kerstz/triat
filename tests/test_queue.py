@@ -185,3 +185,20 @@ def test_remove_under_shuffle_keeps_current():
     while (nxt := q.next()) is not None:
         remaining.append(nxt.video_id)
     assert len(remaining) == 9 and len(set(remaining)) == 9
+
+
+def test_mixed_youtube_and_soundcloud_queue_survives_snapshot_restore():
+    items = [TrackRef("aaaaaaaaaaa", "YT"),
+             TrackRef("soundcloud:tracks:42", "SC", "Auteur", 180.0,
+                      web_url="https://soundcloud.com/a/b"),
+             TrackRef("bbbbbbbbbbb", "YT2")]
+    queue = Queue()
+    queue.set_items(items)
+    queue.jump_to(1)
+    restored = Queue()
+    restored.restore(queue.snapshot())
+    assert ids(restored.items) == ids(items)
+    assert restored.current.video_id == "soundcloud:tracks:42"
+    assert [t.source for t in restored.items] == [
+        "youtube", "soundcloud", "youtube"]
+    assert restored.current.web_url == "https://soundcloud.com/a/b"

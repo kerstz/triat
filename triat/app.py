@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 
 import gi
@@ -21,6 +22,8 @@ from .core import desktop
 from .core.paths import data_dir, state_dir
 from .ui.mini_player import MiniPlayer
 from .ui.window import TriatWindow
+from . import i18n
+from .i18n import _
 
 APP_ID = "org.triat.Triat"
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -51,8 +54,15 @@ class TriatApp(Adw.Application):
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
-        # Triat est monochrome sombre ; le thème clair est prévu pour M2.
-        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        # Triat est monochrome sombre. FORCE_DARK est conservé à dessein
+        # (décision du propriétaire) : le mode clair est prévu pour la V2.
+        style = Adw.StyleManager.get_default()
+        style.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        # Contraste élevé : classe `high-contrast` posée sur nos fenêtres
+        # (suivie en direct). À ce jour, data/style.css n'a aucune règle pour
+        # elle : voir le rapport du lot T14+.
+        style.connect("notify::high-contrast",
+                      lambda *_: self._sync_high_contrast())
         self._load_icons()
         Gtk.Window.set_default_icon_name(APP_ID)
         self._load_fonts()
@@ -71,6 +81,7 @@ class TriatApp(Adw.Application):
             self._fatal = str(exc) or exc.__class__.__name__
             return
         self._apply_desktop_accent()
+        self._preload_cookies()
 
         for name, accels, callback in (
             ("quit", APP_ACCELS["quit"], lambda *_: self.quit_for_real()),
@@ -87,6 +98,23 @@ class TriatApp(Adw.Application):
             self.add_action(action)
             if accels:
                 self.set_accels_for_action(f"app.{name}", accels)
+
+    def _preload_cookies(self) -> None:
+        """Lit/déchiffre les cookies hors du fil GTK (trousseau, disque)."""
+        cookies = getattr(self._engine, "cookies", None)
+        preload = getattr(cookies, "preload", None)
+        if callable(preload):
+            threading.Thread(target=preload, name="cookies-preload",
+                             daemon=True).start()
+
+    def _sync_high_contrast(self) -> None:
+        """Pose ou retire la classe CSS `high-contrast` sur chaque fenêtre."""
+        active = Adw.StyleManager.get_default().get_high_contrast()
+        for window in self.get_windows():
+            if active:
+                window.add_css_class("high-contrast")
+            else:
+                window.remove_css_class("high-contrast")
 
     def _show_page(self, page: str | None) -> None:
         """Fenêtre principale au premier plan, sur une page donnée."""
@@ -122,11 +150,11 @@ class TriatApp(Adw.Application):
         journal = state_dir() / "triat.log"
         page = Adw.StatusPage(
             icon_name="triat-play-symbolic",
-            title="Triat ne peut pas démarrer",
-            description=(f"{self._fatal}\n\nDétails dans {journal}.\n"
-                         "« triat doctor » dans un terminal vérifie "
-                         "l'installation (libmpv, yt-dlp, cookies)."))
-        close = Gtk.Button(label="Quitter", halign=Gtk.Align.CENTER)
+            title=_("Triat ne peut pas démarrer"),
+            description=(_("{fatal}\n\nDétails dans {journal}.\n« triat doctor » "
+                              "dans un terminal vérifie l'installation (libmpv, "
+                              "yt-dlp, cookies).").format(fatal=self._fatal, journal=journal)))
+        close = Gtk.Button(label=_("Quitter"), halign=Gtk.Align.CENTER)
         close.add_css_class("suggested-action")
         close.connect("clicked", lambda *_: self.quit())
         page.set_child(close)
@@ -136,13 +164,18 @@ class TriatApp(Adw.Application):
         header = Adw.HeaderBar()
         header.set_show_title(False)
         toolbar.add_top_bar(header)
-        window = Adw.ApplicationWindow(application=self, title="Triat",
+        window = Adw.ApplicationWindow(application=self, title=_("Triat"),
                                        content=toolbar)
         window.set_default_size(560, 420)
         window.present()
 
     def _show_main(self) -> None:
         self.do_activate()
+
+    def do_window_added(self, window) -> None:
+        Adw.Application.do_window_added(self, window)
+        if Adw.StyleManager.get_default().get_high_contrast():
+            window.add_css_class("high-contrast")
 
     def do_activate(self) -> None:
         if self._engine is None:
@@ -173,7 +206,8 @@ class TriatApp(Adw.Application):
         reactivated = self._window.get_mapped()
         self._window.present()
         if reactivated:
-            GLib.idle_add(lambda: (desktop.focus_under_hyprland(APP_ID), False)[1])
+            # hyprctl peut bloquer : jamais sur le fil GTK.
+            desktop.focus_under_hyprland_async(APP_ID)
         action, self._start_action = self._start_action, None
         if action == "search":
             self._window._on_navigate("search")
@@ -185,6 +219,8 @@ class TriatApp(Adw.Application):
         engine = self._engine
         GLib.timeout_add_seconds(
             8, lambda: (engine.backfill_durations_async(), False)[1])
+        GLib.timeout_add_seconds(
+            30, lambda: (engine.prune_cache_async(), False)[1])
 
     def _schedule_sync(self) -> None:
         """Serveur de synchro lancé une seule fois, à la première fenêtre,
@@ -401,5 +437,6 @@ def run(argv: list[str] | None = None, mini: bool = False,
 
 
 def main(argv: list[str] | None = None) -> int:
+    i18n.setup()
     logs.setup()
     return TriatApp().run(argv if argv is not None else sys.argv)

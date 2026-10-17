@@ -11,10 +11,13 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .net import USER_AGENT_FALLBACK, read_capped, urlopen_checked
@@ -28,6 +31,17 @@ CACHE_MAX_AGE = 90 * 86400
 DURATION_TOLERANCE = 6.0
 # En dessous, des paroles d'un morceau de plus d'une minute sont suspectes.
 MIN_LINES = 4
+
+# Taille du cache mémoire (session privée : rien n'est écrit en base).
+MEMORY_CACHE_SIZE = 64
+
+_YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+
+
+def is_youtube_id(video_id: str) -> bool:
+    """Un identifiant YouTube fait exactement 11 caractères [A-Za-z0-9_-]."""
+    return bool(_YOUTUBE_ID.fullmatch(video_id or ""))
+
 
 # Une ligne LRC : [mm:ss.xx] suivi du texte.
 _LRC_LINE = re.compile(r"^\[(\d+):(\d{1,2})(?:[.:](\d{1,3}))?\]\s*(.*)$")
@@ -85,9 +99,17 @@ _UNREACHABLE = object()      # réponse de `_call` : réseau ou serveur en panne
 class LyricsService:
     """Recherche, met en cache et sert les paroles."""
 
-    def __init__(self, library=None, timeout: float = TIMEOUT) -> None:
+    def __init__(self, library=None, timeout: float = TIMEOUT, *,
+                 is_private: Callable[[], bool] | None = None) -> None:
         self._library = library
         self._timeout = timeout
+        self._is_private = is_private
+        # Cache mémoire borné (LRU), utilisé surtout en session privée.
+        self._memory: OrderedDict[str, Lyrics] = OrderedDict()
+        self._memory_lock = threading.Lock()
+        # Récupérations en vol : video_id -> [événement, résultat].
+        self._inflight: dict[str, list] = {}
+        self._inflight_lock = threading.Lock()
         if library is not None:
             self._ensure_table()
 
@@ -107,7 +129,30 @@ class LyricsService:
             """)
             self._library._db.commit()
 
+    def _private(self) -> bool:
+        try:
+            return bool(self._is_private and self._is_private())
+        except Exception:
+            return True        # dans le doute, on n'écrit rien
+
+    def _memory_get(self, video_id: str) -> Lyrics | None:
+        with self._memory_lock:
+            found = self._memory.get(video_id)
+            if found is not None:
+                self._memory.move_to_end(video_id)
+            return found
+
+    def _memory_put(self, video_id: str, lyrics: Lyrics) -> None:
+        with self._memory_lock:
+            self._memory[video_id] = lyrics
+            self._memory.move_to_end(video_id)
+            while len(self._memory) > MEMORY_CACHE_SIZE:
+                self._memory.popitem(last=False)
+
     def _cached(self, video_id: str) -> Lyrics | None:
+        found = self._memory_get(video_id)
+        if found is not None:
+            return found
         if self._library is None:
             return None
         with self._library._lock:
@@ -130,7 +175,7 @@ class LyricsService:
 
     def _store(self, video_id: str, body: str, plain: str,
                synced: bool, instrumental: bool) -> None:
-        if self._library is None:
+        if self._library is None or self._private():
             return
         try:
             with self._library._lock:
@@ -189,11 +234,41 @@ class LyricsService:
         return len(lines) >= MIN_LINES
 
     def fetch(self, ref) -> Lyrics:
-        """Paroles d'une piste. Bloquant ; ne lève jamais."""
+        """Paroles d'une piste. Bloquant ; ne lève jamais.
+
+        Deux appels concurrents pour le même id ne font qu'une requête.
+        """
         video_id = getattr(ref, "video_id", "") or ""
+        # LRCLIB ne connaît que les pistes YouTube ici : ni réseau ni cache.
+        if video_id and not is_youtube_id(video_id):
+            return Lyrics(video_id, False, [])
         cached = self._cached(video_id)
         if cached is not None:
             return cached
+        with self._inflight_lock:
+            slot = self._inflight.get(video_id)
+            leader = slot is None
+            if leader:
+                slot = [threading.Event(), None]
+                self._inflight[video_id] = slot
+        if not leader:
+            slot[0].wait()
+            if slot[1] is not None:
+                return slot[1]
+            return Lyrics(video_id, False, [])
+        try:
+            result = self._fetch_remote(video_id, ref)
+            slot[1] = result
+            return result
+        except Exception as exc:        # ne lève jamais
+            log.debug("Paroles : échec inattendu : %s", exc)
+            return Lyrics(video_id, False, [])
+        finally:
+            with self._inflight_lock:
+                self._inflight.pop(video_id, None)
+            slot[0].set()
+
+    def _fetch_remote(self, video_id: str, ref) -> Lyrics:
 
         title = (getattr(ref, "title", "") or "").strip()
         artist = (getattr(ref, "artist", "") or "").strip()
@@ -232,18 +307,24 @@ class LyricsService:
         if not isinstance(entry, dict):
             # Hors ligne ou serveur en panne : ne pas mémoriser « pas de
             # paroles » pour 90 jours.
+            result = Lyrics(video_id, False, [], unreachable=unreachable)
             if not unreachable:
                 self._store(video_id, "", "", False, False)
-            return Lyrics(video_id, False, [], unreachable=unreachable)
+                if self._private():
+                    self._memory_put(video_id, result)
+            return result
 
         body = entry.get("syncedLyrics") or ""
         plain = entry.get("plainLyrics") or ""
         instrumental = bool(entry.get("instrumental"))
         self._store(video_id, body, plain, bool(body), instrumental)
-        return Lyrics(
+        result = Lyrics(
             video_id=video_id,
             synced=bool(body),
             lines=parse_lrc(body),
             plain=plain,
             instrumental=instrumental,
         )
+        if self._private():
+            self._memory_put(video_id, result)
+        return result

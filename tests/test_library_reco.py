@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -36,21 +38,22 @@ def signals(lib: Library) -> dict:
 
 # ---- Schéma ----------------------------------------------------------------
 
-def test_schema_v4_tables_and_indexes(lib):
+def test_schema_v5_tables_and_indexes(lib):
     indexes = {r["name"] for r in lib._db.execute("PRAGMA index_list(playlist_items)")}
     assert "idx_playlist_items_video" in indexes
     tables = {r["name"] for r in lib._db.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"reco_skips", "reco_blocklist", "reco_cache"} <= tables
-    assert lib._db.execute("SELECT version FROM schema_version").fetchone()[0] == 4
-    assert library_module.SCHEMA_VERSION == 4
+    assert lib._db.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+    assert library_module.SCHEMA_VERSION == 5
 
 
 @pytest.mark.parametrize("version", [2, 3])
 def test_existing_db_is_upgraded_in_place(tmp_path, version):
     """Une base écrite par le schéma précédent s'ouvre, garde ses données
     et gagne les index et les tables v4."""
-    old_schema = SCHEMA.split("-- v4 :")[0]
+    old_schema = SCHEMA.split("-- v4 :")[0].replace(
+        "last_played REAL,\n    web_url    TEXT", "last_played REAL")
     if version == 2:                       # avant les téléchargements par id
         start = old_schema.index("-- Fichiers téléchargés")
         end = old_schema.index("CREATE TABLE IF NOT EXISTS history")
@@ -70,7 +73,7 @@ def test_existing_db_is_upgraded_in_place(tmp_path, version):
 
     lib = Library(path)
     try:
-        assert lib._db.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+        assert lib._db.execute("SELECT version FROM schema_version").fetchone()[0] == 5
         assert lib.get_track("old1").title == "Ancien"
         assert lib.playlist_covers()[0]["first_id"] == "old1"
         names = {r["name"] for r in lib._db.execute(
@@ -256,3 +259,89 @@ def test_count_owned_matches_owned_tracks(lib):
     lib.set_favorite(ref("f1"), True)
     hist(lib, ref("h1"), NOW - 5, 100)
     assert lib.count_owned() == 3
+
+
+# ---- Schéma v5 : web_url et purge SoundCloud -------------------------------
+
+FIXTURE_V4 = Path(__file__).parent / "fixtures" / "library_v4.sqlite"
+SC1 = "soundcloud:tracks:111"
+SC2 = "soundcloud:tracks:222"
+
+
+def test_migration_v4_to_v5_on_real_db(tmp_path):
+    """Copie d'une vraie base v4 : migration sans quarantaine ni perte."""
+    path = tmp_path / "triat.db"
+    shutil.copy(FIXTURE_V4, path)
+    raw = sqlite3.connect(path)
+    assert raw.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+    assert "web_url" not in {r[1] for r in raw.execute("PRAGMA table_info(tracks)")}
+    raw.close()
+
+    library = Library(path)
+    try:
+        assert library.corrupt_copies() == []
+        assert list(tmp_path.glob("*.corrompue*")) == []
+        assert library._db.execute(
+            "SELECT version FROM schema_version").fetchone()[0] == 5
+        assert "web_url" in {r["name"] for r in
+                             library._db.execute("PRAGMA table_info(tracks)")}
+        assert library.stats()["tracks"] == 3
+        assert [r.title for r in library.list_favorites()] == ["Alpha"]
+        assert len(library.list_playlists()) == 1
+        assert len(library.history_entries()) == 1
+        assert library.get_track("a" * 11).web_url is None
+    finally:
+        library.close()
+    # Idempotent : une seconde ouverture ne change rien.
+    again = Library(path)
+    try:
+        assert again.stats()["tracks"] == 3
+        assert again.corrupt_copies() == []
+    finally:
+        again.close()
+
+
+def sc_ref(urn: str = SC1, web_url: str | None = None) -> TrackRef:
+    return TrackRef(urn, "Titre SC", "Artiste SC", 90.0, web_url=web_url)
+
+
+def test_web_url_roundtrip_and_preserved_by_upsert(lib):
+    link = "https://soundcloud.com/artiste/titre"
+    lib.upsert_track(sc_ref(web_url=link))
+    assert lib.get_track(SC1).web_url == link
+    lib.upsert_track(sc_ref(web_url=None))        # sans permalink : conservé
+    assert lib.get_track(SC1).web_url == link
+    lib.upsert_many([sc_ref(web_url="https://soundcloud.com/autre/lien")])
+    assert lib.get_track(SC1).web_url == "https://soundcloud.com/autre/lien"
+
+
+def test_purge_source_soundcloud_only(lib):
+    yt = ref("y" * 11)
+    sc1, sc2 = sc_ref(SC1, "https://soundcloud.com/a/b"), sc_ref(SC2)
+    lib.upsert_many([yt, sc1, sc2])
+    lib.set_favorite(sc1, True)
+    lib.set_favorite(yt, True)
+    pid = lib.create_playlist("Mixte")
+    lib.add_to_playlist(pid, [yt, sc1, sc2])
+    lib.record_play(sc2, 60.0, True)
+    lib.record_play(yt, 60.0, True)
+    lib.record_skip(sc1, 5.0)
+    lib.block("track", SC2)
+    lib.block("track", yt.video_id)
+    lib.record_tombstone("like", SC1, 1.0)
+    lib.record_tombstone("like", yt.video_id, 1.0)
+    lib.reco_cache_put("mixes:x", {"a": 1})
+
+    assert lib.purge_source("soundcloud") == 2
+
+    assert lib.get_track(SC1) is None and lib.get_track(SC2) is None
+    assert lib.get_track(yt.video_id) is not None
+    assert [r.video_id for r in lib.list_favorites()] == [yt.video_id]
+    assert [r.video_id for r in lib.playlist_items(pid)] == [yt.video_id]
+    assert [r.video_id for r, _a, _s in lib.history_entries()] == [yt.video_id]
+    assert list(lib.blocked()["track"]) == [yt.video_id]
+    assert list(lib.tombstones("like")) == [yt.video_id]
+    assert lib._db.execute("SELECT COUNT(*) FROM reco_skips").fetchone()[0] == 0
+    assert lib.purge_source("soundcloud") == 0
+    with pytest.raises(ValueError):
+        lib.purge_source("autre")

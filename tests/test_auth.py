@@ -44,10 +44,7 @@ def manager(tmp_path, monkeypatch):
     monkeypatch.setattr(auth.keyring, "set_password", fake.set_password)
     monkeypatch.setattr(auth.keyring, "get_password", fake.get_password)
     monkeypatch.setattr(auth.keyring, "delete_password", fake.delete_password)
-    monkeypatch.setattr(auth, "runtime_dir", lambda: tmp_path)
-    mgr = CookieManager()
-    mgr._runtime_path = tmp_path / "cookies.txt"
-    return mgr
+    return CookieManager()
 
 
 @pytest.fixture
@@ -60,14 +57,13 @@ def cookie_file(tmp_path):
 def test_no_cookies_by_default(manager):
     status = manager.status()
     assert not status.present and not status.authenticated
-    assert manager.cookie_file() is None
-    assert manager.ytdlp_opts() == {}
+    assert manager.cookie_header() is None
 
 
 def test_import_detects_authenticated_session(manager, cookie_file):
     status = manager.import_file(cookie_file)
     assert status.present and status.authenticated
-    assert status.count == 4
+    assert status.count == 3   # le cookie hors YouTube est écarté
     assert 9 < status.days_left < 11, "on retient l'expiration la plus proche"
     assert not status.expired
 
@@ -84,19 +80,10 @@ def test_rejects_missing_file(manager, tmp_path):
         manager.import_file(tmp_path / "nexiste.pas")
 
 
-def test_materialized_file_is_private(manager, cookie_file):
-    manager.import_file(cookie_file)
-    path = manager.cookie_file()
-    assert path is not None
-    mode = os.stat(path).st_mode & 0o777
-    assert mode == 0o600, f"le fichier de cookies doit être 0600, trouvé {oct(mode)}"
-
-
 def test_ytdlp_gets_cookies_in_memory_not_a_file(manager, cookie_file):
     from yt_dlp.cookies import YoutubeDLCookieJar
 
     manager.import_file(cookie_file)
-    assert manager.ytdlp_opts() == {}          # jamais de `cookiefile`
 
     class FakeYDL:
         cookiejar = YoutubeDLCookieJar()
@@ -113,12 +100,10 @@ def test_cookie_header_keeps_only_google_domains(manager, cookie_file):
     assert "AUTRE" not in header, "les cookies d'autres domaines ne partent pas"
 
 
-def test_clear_removes_secret_and_file(manager, cookie_file):
+def test_clear_removes_secret(manager, cookie_file):
     manager.import_file(cookie_file)
-    path = manager.cookie_file()
     manager.clear()
-    assert not os.path.exists(path)
-    assert manager.cookie_file() is None
+    assert manager.cookie_header() is None
     assert not manager.status().present
 
 
@@ -191,3 +176,68 @@ def test_plain_text_is_not_mistaken_for_json(manager, tmp_path):
 
     assert _json_to_netscape("pas du json") is None
     assert _json_to_netscape("[]") is None, "une liste vide n'est pas exploitable"
+
+
+def test_import_file_keeps_only_youtube_google_domains(manager, tmp_path):
+    from triat.core.auth import _parse_netscape
+    mixed = SAMPLE + "\n" + "\n".join([
+        ".bank.example\tTRUE\t/\tTRUE\t0\tTOKEN\tfaux-secret",
+        ".notyoutube.com\tTRUE\t/\tFALSE\t0\tX\ty",
+        "accounts.google.com\tFALSE\t/\tTRUE\t0\tOSID\tz",
+    ])
+    src = tmp_path / "all-sites.txt"
+    src.write_text(mixed, encoding="utf-8")
+    manager.import_file(src)
+    stored = auth.keyring.get_password(auth.KEYRING_SERVICE, auth.KEYRING_KEY)
+    domains = {row[0] for row in _parse_netscape(stored)}
+    assert domains == {".youtube.com", "accounts.google.com"}
+    assert "faux-secret" not in stored
+
+
+def test_import_file_without_youtube_cookie_is_refused(manager, tmp_path):
+    src = tmp_path / "other.txt"
+    src.write_text(".example.com\tTRUE\t/\tFALSE\t0\tA\tb\n", encoding="utf-8")
+    with pytest.raises(CookieError):
+        manager.import_file(src)
+    assert not manager.status().present
+
+
+def test_import_creates_no_predictable_temp_file(manager, cookie_file, tmp_path):
+    before = set(os.listdir(tmp_path))
+    manager.import_file(cookie_file)
+    assert set(os.listdir(tmp_path)) == before
+
+
+def test_keyring_failure_is_remembered_for_60s(tmp_path, monkeypatch):
+    calls = []
+
+    def boom(service, key):
+        calls.append(1)
+        raise RuntimeError("dbus indisponible")
+
+    monkeypatch.setattr(auth.keyring, "get_password", boom)
+    now = [100.0]
+    mgr = CookieManager(clock=lambda: now[0])
+    assert mgr.cookie_header() is None
+    mgr.status()
+    mgr.preload()
+    assert len(calls) == 1, "pas de nouvel aller-retour pendant le délai"
+    now[0] += 61
+    mgr.status()
+    assert len(calls) == 2
+
+
+def test_successful_import_clears_failure_state(manager, cookie_file, monkeypatch):
+    manager._failed_until = 1e12
+    manager.import_file(cookie_file)
+    assert manager._failed_until == 0.0
+    assert manager.status().present
+
+
+def test_preload_fills_cache(manager, cookie_file, monkeypatch):
+    manager.import_file(cookie_file)
+    fresh = CookieManager()
+    fresh.preload()
+    monkeypatch.setattr(auth.keyring, "get_password",
+                        lambda *a: pytest.fail("trousseau relu"))
+    assert fresh.status().present
