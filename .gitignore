@@ -32,3 +32,6 @@ youtube-mix-*.txt
 
 # Catalogues gettext compilés (artefacts de build, voir tools/i18n.sh)
 /triat/locale/
+
+# Site en construction (pas d'index.html, captures à refaire) : hors dépôt
+/site/

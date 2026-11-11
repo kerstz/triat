@@ -68,6 +68,7 @@ The only hosts it contacts:
 | `sponsor.ajay.app` | SponsorBlock segments |
 | `lrclib.net` | Synced lyrics |
 | `api.listenbrainz.org` | Scrobbling, only if you turn it on |
+| `soundcloud.com`, `api-v2.soundcloud.com`, `sndcdn.com` | SoundCloud search, streams and artwork, only if the SoundCloud source is on (off by default) |
 | Your own phone, on your local network | Sync, only if you turn it on |
 
 ## Quick start

@@ -4,6 +4,10 @@ All notable changes to Triat are listed here. The format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Security
+
+- Dependencies relocked: brotli 1.2.1 (CVE-2026-111497, decoder out-of-bounds write), certifi 2026.10.23 (PYSEC-2026-4320, emSign root removal) and, in the development lock, filelock 4.2.10 (GHSA advisories). The Flatpak requirements follow the lock, and CI now audits both lock files as written.
+
 ### Added
 
 - A website, [kerstz.github.io/triat](https://kerstz.github.io/triat/).
@@ -18,7 +22,7 @@ All notable changes to Triat are listed here. The format follows [Keep a Changel
 
 ## [0.1.0] - 2026-10-16
 
-Initial public release. The first version went public on 2026-09-24, and the changes below were made on `main` up to this date. No git tag has been cut yet.
+Initial public release, as `main` stood on 2026-10-16. The repository itself went public on 2026-09-24; everything committed between those two dates is part of this entry. No git tag has been cut yet.
 
 ### Added
 

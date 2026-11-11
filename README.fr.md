@@ -68,6 +68,7 @@ Les seuls hôtes contactés :
 | `sponsor.ajay.app` | Segments SponsorBlock |
 | `lrclib.net` | Paroles synchronisées |
 | `api.listenbrainz.org` | Scrobbling, seulement si tu l'actives |
+| `soundcloud.com`, `api-v2.soundcloud.com`, `sndcdn.com` | Recherche, flux et pochettes SoundCloud, seulement si la source SoundCloud est activée (désactivée par défaut) |
 | Ton propre téléphone, sur ton réseau local | Synchro, seulement si tu l'actives |
 
 ## Démarrage rapide
