@@ -110,6 +110,10 @@ jobs:
           pip install --require-hashes -r requirements.lock
           # Bloquant : une dépendance vulnérable ne passe pas.
           pip-audit --strict --progress-spinner off
+          # Les deux verrous tels qu'écrits (sans les installer) : le verrou
+          # de dev n'est pas couvert par l'audit de l'environnement ci-dessus.
+          pip-audit --strict --progress-spinner off --disable-pip \
+            --require-hashes -r requirements.lock -r requirements-dev.lock
 
   canari-extraction:
     # Le point de rupture numéro un de ce type d'application : YouTube
