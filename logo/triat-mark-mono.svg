@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img">
+  <title>Triat, trois points formant un triangle de lecture</title>
+  <circle cx="48" cy="32" r="12" fill="currentColor"/>
+  <circle cx="48" cy="96" r="12" fill="currentColor"/>
+  <circle cx="96" cy="64" r="12" fill="currentColor"/>
+</svg>
